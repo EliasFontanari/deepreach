@@ -3,38 +3,60 @@ from utils import diff_operators
 
 import math
 import torch
+from scipy.spatial.transform import Rotation as ROT
+import numpy as np
 
 # during training, states will be sampled uniformly by each state dimension from the model-unit -1 to 1 range (for training stability),
 # which may or may not correspond to proper test ranges
 # note that coord refers to [time, *state], and input refers to whatever is fed directly to the model (often [time, *state, params])
 # in the future, code will need to be fixed to correctly handle parameterized models
 class Dynamics(ABC):
-    def __init__(self, 
-    loss_type:str, set_mode:str, 
-    state_dim:int, input_dim:int, 
-    control_dim:int, disturbance_dim:int, 
-    state_mean:list, state_var:list, 
-    value_mean:float, value_var:float, value_normto:float, 
-    deepreach_model:str):
+    def __init__(
+        self,
+        loss_type: str,
+        set_mode: str,
+        state_dim: int,
+        input_dim: int,
+        control_dim: int,
+        disturbance_dim: int,
+        state_mean: list,
+        state_var: list,
+        value_mean: float,
+        value_var: float,
+        value_normto: float,
+        deepreach_model: str,
+    ):
         self.loss_type = loss_type
         self.set_mode = set_mode
-        self.state_dim = state_dim 
+        self.state_dim = state_dim
         self.input_dim = input_dim
         self.control_dim = control_dim
         self.disturbance_dim = disturbance_dim
-        self.state_mean = torch.tensor(state_mean) 
+        self.state_mean = torch.tensor(state_mean)
         self.state_var = torch.tensor(state_var)
         self.value_mean = value_mean
         self.value_var = value_var
         self.value_normto = value_normto
         self.deepreach_model = deepreach_model
-        assert self.loss_type in ['brt_hjivi', 'brat_hjivi'], f'loss type {self.loss_type} not recognized'
-        if self.loss_type == 'brat_hjivi':
+        assert self.loss_type in [
+            "brt_hjivi",
+            "brat_hjivi",
+        ], f"loss type {self.loss_type} not recognized"
+        if self.loss_type == "brat_hjivi":
             assert callable(self.reach_fn) and callable(self.avoid_fn)
-        assert self.set_mode in ['reach', 'avoid'], f'set mode {self.set_mode} not recognized'
+        assert self.set_mode in [
+            "reach",
+            "avoid",
+            "reach_avoid"
+        ], f"set mode {self.set_mode} not recognized"
         for state_descriptor in [self.state_mean, self.state_var]:
-            assert len(state_descriptor) == self.state_dim, 'state descriptor dimension does not equal state dimension, ' + str(len(state_descriptor)) + ' != ' + str(self.state_dim)
-    
+            assert len(state_descriptor) == self.state_dim, (
+                "state descriptor dimension does not equal state dimension, "
+                + str(len(state_descriptor))
+                + " != "
+                + str(self.state_dim)
+            )
+
     # ALL METHODS ARE BATCH COMPATIBLE
 
     # MODEL-UNIT CONVERSIONS (TODO: refactor into separate model-unit conversion class?)
@@ -42,49 +64,78 @@ class Dynamics(ABC):
     # convert model input to real coord
     def input_to_coord(self, input):
         coord = input.clone()
-        coord[..., 1:] = (input[..., 1:] * self.state_var.to(device=input.device)) + self.state_mean.to(device=input.device)
+        coord[..., 1:] = (
+            input[..., 1:] * self.state_var.to(device=input.device)
+        ) + self.state_mean.to(device=input.device)
         return coord
 
     # convert real coord to model input
     def coord_to_input(self, coord):
         input = coord.clone()
-        input[..., 1:] = (coord[..., 1:] - self.state_mean.to(device=coord.device)) / self.state_var.to(device=coord.device)
+        input[..., 1:] = (
+            coord[..., 1:] - self.state_mean.to(device=coord.device)
+        ) / self.state_var.to(device=coord.device)
         return input
 
     # convert model io to real value
     def io_to_value(self, input, output):
-        if self.deepreach_model=="diff":
-            return (output * self.value_var / self.value_normto) + self.boundary_fn(self.input_to_coord(input)[..., 1:])
-        elif self.deepreach_model=="exact":
-            return (output * input[..., 0] * self.value_var / self.value_normto) + self.boundary_fn(self.input_to_coord(input)[..., 1:])
+        if self.deepreach_model == "diff":
+            return (output * self.value_var / self.value_normto) + self.boundary_fn(
+                self.input_to_coord(input)[..., 1:]
+            )
+        elif self.deepreach_model == "exact":
+            return (
+                output * input[..., 0] * self.value_var / self.value_normto
+            ) + self.boundary_fn(self.input_to_coord(input)[..., 1:])
         else:
             return (output * self.value_var / self.value_normto) + self.value_mean
 
     # convert model io to real dv
     def io_to_dv(self, input, output):
-        dodi = diff_operators.jacobian(output.unsqueeze(dim=-1), input)[0].squeeze(dim=-2)
+        dodi = diff_operators.jacobian(output.unsqueeze(dim=-1), input)[0].squeeze(
+            dim=-2
+        )
 
-        if self.deepreach_model=="diff":
+        if self.deepreach_model == "diff":
             dvdt = (self.value_var / self.value_normto) * dodi[..., 0]
 
-            dvds_term1 = (self.value_var / self.value_normto / self.state_var.to(device=dodi.device)) * dodi[..., 1:]
+            dvds_term1 = (
+                self.value_var
+                / self.value_normto
+                / self.state_var.to(device=dodi.device)
+            ) * dodi[..., 1:]
             state = self.input_to_coord(input)[..., 1:]
-            dvds_term2 = diff_operators.jacobian(self.boundary_fn(state).unsqueeze(dim=-1), state)[0].squeeze(dim=-2)
+            dvds_term2 = diff_operators.jacobian(
+                self.boundary_fn(state).unsqueeze(dim=-1), state
+            )[0].squeeze(dim=-2)
             dvds = dvds_term1 + dvds_term2
-        elif self.deepreach_model=="exact":
-            dvdt = (self.value_var / self.value_normto) * \
-                (input[..., 0]*dodi[..., 0] + output)
+        elif self.deepreach_model == "exact":
+            dvdt = (self.value_var / self.value_normto) * (
+                input[..., 0] * dodi[..., 0] + output
+            )
 
-            dvds_term1 = (self.value_var / self.value_normto /
-                          self.state_var.to(device=dodi.device)) * dodi[..., 1:] * input[..., 0].unsqueeze(-1)
+            dvds_term1 = (
+                (
+                    self.value_var
+                    / self.value_normto
+                    / self.state_var.to(device=dodi.device)
+                )
+                * dodi[..., 1:]
+                * input[..., 0].unsqueeze(-1)
+            )
             state = self.input_to_coord(input)[..., 1:]
-            dvds_term2 = diff_operators.jacobian(self.boundary_fn(
-                state).unsqueeze(dim=-1), state)[0].squeeze(dim=-2)
+            dvds_term2 = diff_operators.jacobian(
+                self.boundary_fn(state).unsqueeze(dim=-1), state
+            )[0].squeeze(dim=-2)
             dvds = dvds_term1 + dvds_term2
         else:
             dvdt = (self.value_var / self.value_normto) * dodi[..., 0]
-            dvds = (self.value_var / self.value_normto / self.state_var.to(device=dodi.device)) * dodi[..., 1:]
-        
+            dvds = (
+                self.value_var
+                / self.value_normto
+                / self.state_var.to(device=dodi.device)
+            ) * dodi[..., 1:]
+
         return torch.cat((dvdt.unsqueeze(dim=-1), dvds), dim=-1)
 
     # ALL FOLLOWING METHODS USE REAL UNITS
@@ -100,7 +151,7 @@ class Dynamics(ABC):
     @abstractmethod
     def dsdt(self, state, control, disturbance):
         raise NotImplementedError
-    
+
     @abstractmethod
     def boundary_fn(self, state):
         raise NotImplementedError
@@ -129,16 +180,23 @@ class Dynamics(ABC):
     def plot_config(self):
         raise NotImplementedError
 
+
 class ParameterizedVertDrone2D(Dynamics):
-    def __init__(self, gravity:float, input_multiplier_max:float, input_magnitude_max:float):
-        self.gravity = gravity                             # g
-        self.input_multiplier_max = input_multiplier_max   # k_max
-        self.input_magnitude_max = input_magnitude_max     # u_max
+    def __init__(
+        self, gravity: float, input_multiplier_max: float, input_magnitude_max: float
+    ):
+        self.gravity = gravity  # g
+        self.input_multiplier_max = input_multiplier_max  # k_max
+        self.input_magnitude_max = input_magnitude_max  # u_max
         super().__init__(
-            loss_type='brt_hjivi', set_mode='avoid',
-            state_dim=3, input_dim=4, control_dim=1, disturbance_dim=0,
-            state_mean=[0, 1.5, self.input_multiplier_max/2], # v, z, k
-            state_var=[4, 2, self.input_multiplier_max/2],    # v, z, k
+            loss_type="brt_hjivi",
+            set_mode="avoid",
+            state_dim=3,
+            input_dim=4,
+            control_dim=1,
+            disturbance_dim=0,
+            state_mean=[0, 1.5, self.input_multiplier_max / 2],  # v, z, k
+            state_var=[4, 2, self.input_multiplier_max / 2],  # v, z, k
             value_mean=0.25,
             value_var=0.5,
             value_normto=0.02,
@@ -147,9 +205,9 @@ class ParameterizedVertDrone2D(Dynamics):
 
     def state_test_range(self):
         return [
-            [-4, 4],                        # v
-            [-0.5, 3.5],                    # z
-            [0, self.input_multiplier_max], # k
+            [-4, 4],  # v
+            [-0.5, 3.5],  # z
+            [0, self.input_multiplier_max],  # k
         ]
 
     def equivalent_wrapped_state(self, state):
@@ -162,7 +220,7 @@ class ParameterizedVertDrone2D(Dynamics):
     # \dot k = 0
     def dsdt(self, state, control, disturbance):
         dsdt = torch.zeros_like(state)
-        dsdt[..., 0] = state[..., 2]*control[..., 0] - self.gravity
+        dsdt[..., 0] = state[..., 2] * control[..., 0] - self.gravity
         dsdt[..., 1] = state[..., 0]
         dsdt[..., 2] = 0
         return dsdt
@@ -172,15 +230,17 @@ class ParameterizedVertDrone2D(Dynamics):
 
     def sample_target_state(self, num_samples):
         raise NotImplementedError
-    
+
     def cost_fn(self, state_traj):
         raise NotImplementedError
 
     def hamiltonian(self, state, dvds):
-        return state[..., 2]*torch.abs(dvds[..., 0]*self.input_magnitude_max) \
-                - dvds[..., 0]*self.gravity \
-                + dvds[..., 1]*state[..., 0]
-    
+        return (
+            state[..., 2] * torch.abs(dvds[..., 0] * self.input_magnitude_max)
+            - dvds[..., 0] * self.gravity
+            + dvds[..., 1] * state[..., 0]
+        )
+
     def optimal_control(self, state, dvds):
         raise NotImplementedError
 
@@ -189,26 +249,37 @@ class ParameterizedVertDrone2D(Dynamics):
 
     def plot_config(self):
         return {
-            'state_slices': [0, 1.5, self.input_multiplier_max/2],
-            'state_labels': ['v', 'z', 'k'],
-            'x_axis_idx': 0,
-            'y_axis_idx': 1,
-            'z_axis_idx': 2,
+            "state_slices": [0, 1.5, self.input_multiplier_max / 2],
+            "state_labels": ["v", "z", "k"],
+            "x_axis_idx": 0,
+            "y_axis_idx": 1,
+            "z_axis_idx": 2,
         }
 
+
 class Air3D(Dynamics):
-    def __init__(self, collisionR:float, velocity:float, omega_max:float, angle_alpha_factor:float):
+    def __init__(
+        self,
+        collisionR: float,
+        velocity: float,
+        omega_max: float,
+        angle_alpha_factor: float,
+    ):
         self.collisionR = collisionR
         self.velocity = velocity
         self.omega_max = omega_max
         self.angle_alpha_factor = angle_alpha_factor
         super().__init__(
-            loss_type='brt_hjivi', set_mode='avoid',
-            state_dim=3, input_dim=4, control_dim=1, disturbance_dim=1,
-            state_mean=[0, 0, 0], 
-            state_var=[1, 1, self.angle_alpha_factor*math.pi],
-            value_mean=0.25, 
-            value_var=0.5, 
+            loss_type="brt_hjivi",
+            set_mode="avoid",
+            state_dim=3,
+            input_dim=4,
+            control_dim=1,
+            disturbance_dim=1,
+            state_mean=[0, 0, 0],
+            state_var=[1, 1, self.angle_alpha_factor * math.pi],
+            value_mean=0.25,
+            value_var=0.5,
             value_normto=0.02,
             deepreach_model="exact",
         )
@@ -222,7 +293,9 @@ class Air3D(Dynamics):
 
     def equivalent_wrapped_state(self, state):
         wrapped_state = torch.clone(state)
-        wrapped_state[..., 2] = (wrapped_state[..., 2] + math.pi) % (2*math.pi) - math.pi
+        wrapped_state[..., 2] = (wrapped_state[..., 2] + math.pi) % (
+            2 * math.pi
+        ) - math.pi
         return wrapped_state
 
     # Air3D dynamics
@@ -231,58 +304,83 @@ class Air3D(Dynamics):
     # \dot \psi = d - u
     def dsdt(self, state, control, disturbance):
         dsdt = torch.zeros_like(state)
-        dsdt[..., 0] = -self.velocity + self.velocity*torch.cos(state[..., 2]) + control[..., 0]*state[..., 1]
-        dsdt[..., 1] = self.velocity*torch.sin(state[..., 2]) - control[..., 0]*state[..., 0]
+        dsdt[..., 0] = (
+            -self.velocity
+            + self.velocity * torch.cos(state[..., 2])
+            + control[..., 0] * state[..., 1]
+        )
+        dsdt[..., 1] = (
+            self.velocity * torch.sin(state[..., 2]) - control[..., 0] * state[..., 0]
+        )
         dsdt[..., 2] = disturbance[..., 0] - control[..., 0]
         return dsdt
-    
+
     def boundary_fn(self, state):
         return torch.norm(state[..., :2], dim=-1) - self.collisionR
 
     def sample_target_state(self, num_samples):
         raise NotImplementedError
-    
+
     def cost_fn(self, state_traj):
         return torch.min(self.boundary_fn(state_traj), dim=-1).values
-    
+
     def hamiltonian(self, state, dvds):
-        ham = self.omega_max * torch.abs(dvds[..., 0] * state[..., 1] - dvds[..., 1] * state[..., 0] - dvds[..., 2])  # Control component
+        ham = self.omega_max * torch.abs(
+            dvds[..., 0] * state[..., 1] - dvds[..., 1] * state[..., 0] - dvds[..., 2]
+        )  # Control component
         ham = ham - self.omega_max * torch.abs(dvds[..., 2])  # Disturbance component
-        ham = ham + (self.velocity * (torch.cos(state[..., 2]) - 1.0) * dvds[..., 0]) + (self.velocity * torch.sin(state[..., 2]) * dvds[..., 1])  # Constant component
+        ham = (
+            ham
+            + (self.velocity * (torch.cos(state[..., 2]) - 1.0) * dvds[..., 0])
+            + (self.velocity * torch.sin(state[..., 2]) * dvds[..., 1])
+        )  # Constant component
         return ham
 
     def optimal_control(self, state, dvds):
-        det = dvds[..., 0]*state[..., 1] - dvds[..., 1]*state[..., 0]-dvds[..., 2]
+        det = dvds[..., 0] * state[..., 1] - dvds[..., 1] * state[..., 0] - dvds[..., 2]
         return (self.omega_max * torch.sign(det))[..., None]
-    
+
     def optimal_disturbance(self, state, dvds):
         return (-self.omega_max * torch.sign(dvds[..., 2]))[..., None]
-    
+
     def plot_config(self):
         return {
-            'state_slices': [0, 0, 0],
-            'state_labels': ['x', 'y', 'theta'],
-            'x_axis_idx': 0,
-            'y_axis_idx': 1,
-            'z_axis_idx': 2,
+            "state_slices": [0, 0, 0],
+            "state_labels": ["x", "y", "theta"],
+            "x_axis_idx": 0,
+            "y_axis_idx": 1,
+            "z_axis_idx": 2,
         }
 
+
 class Dubins3D(Dynamics):
-    def __init__(self, goalR:float, velocity:float, omega_max:float, angle_alpha_factor:float, set_mode:str, freeze_model: bool):
+    def __init__(
+        self,
+        goalR: float,
+        velocity: float,
+        omega_max: float,
+        angle_alpha_factor: float,
+        set_mode: str,
+        freeze_model: bool,
+    ):
         self.goalR = goalR
         self.velocity = velocity
         self.omega_max = omega_max
         self.angle_alpha_factor = angle_alpha_factor
         self.freeze_model = freeze_model
         super().__init__(
-            loss_type='brt_hjivi', set_mode=set_mode,
-            state_dim=3, input_dim=4, control_dim=1, disturbance_dim=0,
-            state_mean=[0, 0, 0], 
-            state_var=[1, 1, self.angle_alpha_factor*math.pi],
-            value_mean=0.25, 
-            value_var=0.5, 
+            loss_type="brt_hjivi",
+            set_mode=set_mode,
+            state_dim=3,
+            input_dim=4,
+            control_dim=1,
+            disturbance_dim=0,
+            state_mean=[0, 0, 0],
+            state_var=[1, 1, self.angle_alpha_factor * math.pi],
+            value_mean=0.25,
+            value_var=0.5,
             value_normto=0.02,
-            deepreach_model="exact"
+            deepreach_model="exact",
         )
 
     def state_test_range(self):
@@ -294,9 +392,11 @@ class Dubins3D(Dynamics):
 
     def equivalent_wrapped_state(self, state):
         wrapped_state = torch.clone(state)
-        wrapped_state[..., 2] = (wrapped_state[..., 2] + math.pi) % (2*math.pi) - math.pi
+        wrapped_state[..., 2] = (wrapped_state[..., 2] + math.pi) % (
+            2 * math.pi
+        ) - math.pi
         return wrapped_state
-        
+
     # Dubins3D dynamics
     # \dot x    = v \cos \theta
     # \dot y    = v \sin \theta
@@ -305,53 +405,60 @@ class Dubins3D(Dynamics):
         if self.freeze_model:
             raise NotImplementedError
         dsdt = torch.zeros_like(state)
-        dsdt[..., 0] = self.velocity*torch.cos(state[..., 2])
-        dsdt[..., 1] = self.velocity*torch.sin(state[..., 2])
+        dsdt[..., 0] = self.velocity * torch.cos(state[..., 2])
+        dsdt[..., 1] = self.velocity * torch.sin(state[..., 2])
         dsdt[..., 2] = control[..., 0]
         return dsdt
-    
+
     def boundary_fn(self, state):
         return torch.norm(state[..., :2], dim=-1) - self.goalR
 
     def sample_target_state(self, num_samples):
         raise NotImplementedError
-    
+
     def cost_fn(self, state_traj):
         return torch.min(self.boundary_fn(state_traj), dim=-1).values
-    
+
     def hamiltonian(self, state, dvds):
         if self.freeze_model:
             raise NotImplementedError
-        if self.set_mode == 'reach':
-            return self.velocity*(torch.cos(state[..., 2]) * dvds[..., 0] + torch.sin(state[..., 2]) * dvds[..., 1]) - self.omega_max * torch.abs(dvds[..., 2]) 
-        elif self.set_mode == 'avoid':
-            return self.velocity*(torch.cos(state[..., 2]) * dvds[..., 0] + torch.sin(state[..., 2]) * dvds[..., 1]) + self.omega_max * torch.abs(dvds[..., 2])
+        if self.set_mode == "reach":
+            return self.velocity * (
+                torch.cos(state[..., 2]) * dvds[..., 0]
+                + torch.sin(state[..., 2]) * dvds[..., 1]
+            ) - self.omega_max * torch.abs(dvds[..., 2])
+        elif self.set_mode == "avoid":
+            return self.velocity * (
+                torch.cos(state[..., 2]) * dvds[..., 0]
+                + torch.sin(state[..., 2]) * dvds[..., 1]
+            ) + self.omega_max * torch.abs(dvds[..., 2])
 
     def optimal_control(self, state, dvds):
-        if self.set_mode == 'reach':
-            return (-self.omega_max*torch.sign(dvds[..., 2]))[..., None]
-        elif self.set_mode == 'avoid':
-            return (self.omega_max*torch.sign(dvds[..., 2]))[..., None]
+        if self.set_mode == "reach":
+            return (-self.omega_max * torch.sign(dvds[..., 2]))[..., None]
+        elif self.set_mode == "avoid":
+            return (self.omega_max * torch.sign(dvds[..., 2]))[..., None]
 
     def optimal_disturbance(self, state, dvds):
         return 0
-    
+
     def plot_config(self):
         return {
-            'state_slices': [0, 0, 0],
-            'state_labels': ['x', 'y', r'$\theta$'],
-            'x_axis_idx': 0,
-            'y_axis_idx': 1,
-            'z_axis_idx': 2,
+            "state_slices": [0, 0, 0],
+            "state_labels": ["x", "y", r"$\theta$"],
+            "x_axis_idx": 0,
+            "y_axis_idx": 1,
+            "z_axis_idx": 2,
         }
 
+
 class Dubins4D(Dynamics):
-    def __init__(self, bound_mode:str):
+    def __init__(self, bound_mode: str):
         self.vMin = 0.2
         self.vMax = 14.8
         self.collisionR = 1.5
         self.bound_mode = bound_mode
-        assert self.bound_mode in ['v1', 'v2']
+        assert self.bound_mode in ["v1", "v2"]
 
         xMean = 0
         yMean = 0
@@ -362,16 +469,49 @@ class Dubins4D(Dynamics):
 
         xVar = 10
         yVar = 10
-        thetaVar = 1.2*math.pi
+        thetaVar = 1.2 * math.pi
         vVar = 7.5
         aVar = 10
-        oVar = 3*math.pi if self.bound_mode == 'v1' else 2.0
-        
+        oVar = 3 * math.pi if self.bound_mode == "v1" else 2.0
+
         super().__init__(
-            loss_type='brt_hjivi',
-            state_dim=14, input_dim=15,  control_dim=2, disturbance_dim=0,
-            state_mean=[xMean, yMean, thetaMean, vMean, xMean, yMean, aMean, aMean, oMean, oMean, aMean, aMean, oMean, oMean],
-            state_var=[xVar, yVar, thetaVar, vVar, xVar, yVar, aVar, aVar, oVar, oVar, aVar, aVar, oVar, oVar],
+            loss_type="brt_hjivi",
+            state_dim=14,
+            input_dim=15,
+            control_dim=2,
+            disturbance_dim=0,
+            state_mean=[
+                xMean,
+                yMean,
+                thetaMean,
+                vMean,
+                xMean,
+                yMean,
+                aMean,
+                aMean,
+                oMean,
+                oMean,
+                aMean,
+                aMean,
+                oMean,
+                oMean,
+            ],
+            state_var=[
+                xVar,
+                yVar,
+                thetaVar,
+                vVar,
+                xVar,
+                yVar,
+                aVar,
+                aVar,
+                oVar,
+                oVar,
+                aVar,
+                aVar,
+                oVar,
+                oVar,
+            ],
             value_mean=13,
             value_var=14,
             value_normto=0.02,
@@ -398,7 +538,9 @@ class Dubins4D(Dynamics):
 
     def equivalent_wrapped_state(self, state):
         wrapped_state = torch.clone(state)
-        wrapped_state[..., 2] = (wrapped_state[..., 2] + math.pi) % (2*math.pi) - math.pi
+        wrapped_state[..., 2] = (wrapped_state[..., 2] + math.pi) % (
+            2 * math.pi
+        ) - math.pi
         return wrapped_state
 
     def boundary_fn(self, state):
@@ -406,7 +548,7 @@ class Dubins4D(Dynamics):
 
     def sample_target_state(self, num_samples):
         raise NotImplementedError
-    
+
     def cost_fn(self, state_traj):
         raise NotImplementedError
 
@@ -425,8 +567,9 @@ class Dubins4D(Dynamics):
     def plot_config(self):
         raise NotImplementedError
 
+
 class NarrowPassage(Dynamics):
-    def __init__(self, avoid_fn_weight:float, avoid_only:bool):
+    def __init__(self, avoid_fn_weight: float, avoid_only: bool):
         self.L = 2.0
 
         # # Target positions
@@ -436,14 +579,14 @@ class NarrowPassage(Dynamics):
         # State bounds
         self.vMin = 0.001
         self.vMax = 6.50
-        self.phiMin = -0.3*math.pi + 0.001
-        self.phiMax = 0.3*math.pi - 0.001
+        self.phiMin = -0.3 * math.pi + 0.001
+        self.phiMax = 0.3 * math.pi - 0.001
 
         # Control bounds
         self.aMin = -4.0
         self.aMax = 2.0
-        self.psiMin = -3.0*math.pi
-        self.psiMax = 3.0*math.pi
+        self.psiMin = -3.0 * math.pi
+        self.psiMax = 3.0 * math.pi
 
         # Lower and upper curb positions (in the y direction)
         self.curb_positions = [-2.8, 2.8]
@@ -455,20 +598,31 @@ class NarrowPassage(Dynamics):
 
         self.avoid_only = avoid_only
 
+        print(f'Avoid only: {avoid_only}')
+
         super().__init__(
-            loss_type='brt_hjivi' if self.avoid_only else 'brat_hjivi', set_mode='avoid' if self.avoid_only else 'reach',
-            state_dim=10, input_dim=11, control_dim=4, disturbance_dim=0,
+            loss_type="brt_hjivi" if self.avoid_only else "brt_hjivi",
+            set_mode="avoid" if self.avoid_only else "reach",
+            state_dim=10,
+            input_dim=11,
+            control_dim=4,
+            disturbance_dim=0,
             # state = [x1, y1, th1, v1, phi1, x2, y2, th2, v2, phi2]
-            state_mean=[
-                0, 0, 0, 3, 0, 
-                0, 0, 0, 3, 0
-            ],
+            state_mean=[0, 0, 0, 3, 0, 0, 0, 0, 3, 0],
             state_var=[
-                8.0, 3.8, 1.2*math.pi, 4.0, 1.2*0.3*math.pi, 
-                8.0, 3.8, 1.2*math.pi, 4.0, 1.2*0.3*math.pi,
+                8.0,
+                3.8,
+                1.2 * math.pi,
+                4.0,
+                1.2 * 0.3 * math.pi,
+                8.0,
+                3.8,
+                1.2 * math.pi,
+                4.0,
+                1.2 * 0.3 * math.pi,
             ],
-            value_mean=0.25*8.0,
-            value_var=0.5*8.0,
+            value_mean=0.25 * 8.0,
+            value_var=0.5 * 8.0,
             value_normto=0.02,
             deepreach_model="exact",
         )
@@ -479,21 +633,29 @@ class NarrowPassage(Dynamics):
             [-3.8, 3.8],
             [-math.pi, math.pi],
             [-1, 7],
-            [-0.3*math.pi, 0.3*math.pi],
+            [-0.3 * math.pi, 0.3 * math.pi],
             [-8, 8],
             [-3.8, 3.8],
             [-math.pi, math.pi],
             [-1, 7],
-            [-0.3*math.pi, 0.3*math.pi],
+            [-0.3 * math.pi, 0.3 * math.pi],
         ]
 
     def equivalent_wrapped_state(self, state):
         wrapped_state = torch.clone(state)
-        wrapped_state[..., 2] = (wrapped_state[..., 2] + math.pi) % (2*math.pi) - math.pi
-        wrapped_state[..., 4] = (wrapped_state[..., 4] + math.pi) % (2*math.pi) - math.pi
-        wrapped_state[..., 7] = (wrapped_state[..., 7] + math.pi) % (2*math.pi) - math.pi 
-        wrapped_state[..., 9] = (wrapped_state[..., 9] + math.pi) % (2*math.pi) - math.pi 
-        return wrapped_state 
+        wrapped_state[..., 2] = (wrapped_state[..., 2] + math.pi) % (
+            2 * math.pi
+        ) - math.pi
+        wrapped_state[..., 4] = (wrapped_state[..., 4] + math.pi) % (
+            2 * math.pi
+        ) - math.pi
+        wrapped_state[..., 7] = (wrapped_state[..., 7] + math.pi) % (
+            2 * math.pi
+        ) - math.pi
+        wrapped_state[..., 9] = (wrapped_state[..., 9] + math.pi) % (
+            2 * math.pi
+        ) - math.pi
+        return wrapped_state
 
     # NarrowPassage dynamics
     # \dot x   = v * cos(th)
@@ -508,14 +670,14 @@ class NarrowPassage(Dynamics):
     # \dot phi = ...
     def dsdt(self, state, control, disturbance):
         dsdt = torch.zeros_like(state)
-        dsdt[..., 0] = state[..., 3]*torch.cos(state[..., 2])
-        dsdt[..., 1] = state[..., 3]*torch.sin(state[..., 2])
-        dsdt[..., 2] = state[..., 3]*torch.tan(state[..., 4]) / self.L
+        dsdt[..., 0] = state[..., 3] * torch.cos(state[..., 2])
+        dsdt[..., 1] = state[..., 3] * torch.sin(state[..., 2])
+        dsdt[..., 2] = state[..., 3] * torch.tan(state[..., 4]) / self.L
         dsdt[..., 3] = control[..., 0]
         dsdt[..., 4] = control[..., 1]
-        dsdt[..., 5] = state[..., 8]*torch.cos(state[..., 7])
-        dsdt[..., 6] = state[..., 8]*torch.sin(state[..., 7])
-        dsdt[..., 7] = state[..., 8]*torch.tan(state[..., 9]) / self.L
+        dsdt[..., 5] = state[..., 8] * torch.cos(state[..., 7])
+        dsdt[..., 6] = state[..., 8] * torch.sin(state[..., 7])
+        dsdt[..., 7] = state[..., 8] * torch.tan(state[..., 9]) / self.L
         dsdt[..., 8] = control[..., 2]
         dsdt[..., 9] = control[..., 3]
         return dsdt
@@ -524,34 +686,44 @@ class NarrowPassage(Dynamics):
         if self.avoid_only:
             raise RuntimeError
         # vehicle 1
-        goal_tensor_R1 = torch.tensor([self.goalX[0], self.goalY[0]], device=state.device)
+        goal_tensor_R1 = torch.tensor(
+            [self.goalX[0], self.goalY[0]], device=state.device
+        )
         dist_R1 = torch.norm(state[..., 0:2] - goal_tensor_R1, dim=-1) - self.L
         # vehicle 2
-        goal_tensor_R2 = torch.tensor([self.goalX[1], self.goalY[1]], device=state.device)
+        goal_tensor_R2 = torch.tensor(
+            [self.goalX[1], self.goalY[1]], device=state.device
+        )
         dist_R2 = torch.norm(state[..., 5:7] - goal_tensor_R2, dim=-1) - self.L
         return torch.maximum(dist_R1, dist_R2)
-    
+
     def avoid_fn(self, state):
         # distance from lower curb
-        dist_lc_R1 = state[..., 1] - self.curb_positions[0] - 0.5*self.L
-        dist_lc_R2 = state[..., 6] - self.curb_positions[0] - 0.5*self.L
+        dist_lc_R1 = state[..., 1] - self.curb_positions[0] - 0.5 * self.L
+        dist_lc_R2 = state[..., 6] - self.curb_positions[0] - 0.5 * self.L
         dist_lc = torch.minimum(dist_lc_R1, dist_lc_R2)
-        
+
         # distance from upper curb
-        dist_uc_R1 = self.curb_positions[1] - state[..., 1] - 0.5*self.L
-        dist_uc_R2 = self.curb_positions[1] - state[..., 6] - 0.5*self.L
+        dist_uc_R1 = self.curb_positions[1] - state[..., 1] - 0.5 * self.L
+        dist_uc_R2 = self.curb_positions[1] - state[..., 6] - 0.5 * self.L
         dist_uc = torch.minimum(dist_uc_R1, dist_uc_R2)
-        
+
         # distance from the stranded car
         stranded_car_pos = torch.tensor(self.stranded_car_pos, device=state.device)
-        dist_stranded_R1 = torch.norm(state[..., 0:2] - stranded_car_pos, dim=-1) - self.L
-        dist_stranded_R2 = torch.norm(state[..., 5:7] - stranded_car_pos, dim=-1) - self.L
+        dist_stranded_R1 = (
+            torch.norm(state[..., 0:2] - stranded_car_pos, dim=-1) - self.L
+        )
+        dist_stranded_R2 = (
+            torch.norm(state[..., 5:7] - stranded_car_pos, dim=-1) - self.L
+        )
         dist_stranded = torch.minimum(dist_stranded_R1, dist_stranded_R2)
 
         # distance between the vehicles themselves
         dist_R1R2 = torch.norm(state[..., 0:2] - state[..., 5:7], dim=-1) - self.L
 
-        return self.avoid_fn_weight * torch.min(torch.min(torch.min(dist_lc, dist_uc), dist_stranded), dist_R1R2)
+        return self.avoid_fn_weight * torch.min(
+            torch.min(torch.min(dist_lc, dist_uc), dist_stranded), dist_R1R2
+        )
 
     def boundary_fn(self, state):
         if self.avoid_only:
@@ -561,28 +733,33 @@ class NarrowPassage(Dynamics):
 
     def sample_target_state(self, num_samples):
         raise NotImplementedError
-    
-    def cost_fn(self, state_traj):    
+
+    def cost_fn(self, state_traj):
         if self.avoid_only:
             return torch.min(self.avoid_fn(state_traj), dim=-1).values
-        else:   
-            # return min_t max{l(x(t)), max_k_up_to_t{-g(x(k))}}, where l(x) is reach_fn, g(x) is avoid_fn 
+        else:
+            # return min_t max{l(x(t)), max_k_up_to_t{-g(x(k))}}, where l(x) is reach_fn, g(x) is avoid_fn
             reach_values = self.reach_fn(state_traj)
             avoid_values = self.avoid_fn(state_traj)
-            return torch.min(torch.maximum(reach_values, torch.cummax(-avoid_values, dim=-1).values), dim=-1).values
+            return torch.min(
+                torch.maximum(reach_values, torch.cummax(-avoid_values, dim=-1).values),
+                dim=-1,
+            ).values
 
     def hamiltonian(self, state, dvds):
         optimal_control = self.optimal_control(state, dvds)
-        return state[..., 3] * torch.cos(state[..., 2]) * dvds[..., 0] + \
-               state[..., 3] * torch.sin(state[..., 2]) * dvds[..., 1] + \
-               state[..., 3] * torch.tan(state[..., 4]) * dvds[..., 2] / self.L + \
-               optimal_control[..., 0] * dvds[..., 3] + \
-               optimal_control[..., 1] * dvds[..., 4] + \
-               state[..., 8] * torch.cos(state[..., 7]) * dvds[..., 5] + \
-               state[..., 8] * torch.sin(state[..., 7]) * dvds[..., 6] + \
-               state[..., 8] * torch.tan(state[..., 9]) * dvds[..., 7] / self.L + \
-               optimal_control[..., 2] * dvds[..., 8] + \
-               optimal_control[..., 3] * dvds[..., 9]
+        return (
+            state[..., 3] * torch.cos(state[..., 2]) * dvds[..., 0]
+            + state[..., 3] * torch.sin(state[..., 2]) * dvds[..., 1]
+            + state[..., 3] * torch.tan(state[..., 4]) * dvds[..., 2] / self.L
+            + optimal_control[..., 0] * dvds[..., 3]
+            + optimal_control[..., 1] * dvds[..., 4]
+            + state[..., 8] * torch.cos(state[..., 7]) * dvds[..., 5]
+            + state[..., 8] * torch.sin(state[..., 7]) * dvds[..., 6]
+            + state[..., 8] * torch.tan(state[..., 9]) * dvds[..., 7] / self.L
+            + optimal_control[..., 2] * dvds[..., 8]
+            + optimal_control[..., 3] * dvds[..., 9]
+        )
 
     def optimal_control(self, state, dvds):
         a1_min = self.aMin * (state[..., 3] > self.vMin)
@@ -606,33 +783,45 @@ class NarrowPassage(Dynamics):
             a2 = torch.where(dvds[..., 8] > 0, a2_min, a2_max)
             psi2 = torch.where(dvds[..., 9] > 0, psi2_min, psi2_max)
 
-        return torch.cat((a1[..., None], psi1[..., None], a2[..., None], psi2[..., None]), dim=-1)
+        return torch.cat(
+            (a1[..., None], psi1[..., None], a2[..., None], psi2[..., None]), dim=-1
+        )
 
     def optimal_disturbance(self, state, dvds):
         return 0
 
     def plot_config(self):
         return {
-            'state_slices': [
-                -6.0, -1.4, 0.0, 6.5, 0.0, 
-                -6.0, 1.4, -math.pi, 0.0, 0.0
+            "state_slices": [-6.0, -1.4, 0.0, 6.5, 0.0, -6.0, 1.4, -math.pi, 0.0, 0.0],
+            "state_labels": [
+                r"$x_1$",
+                r"$y_1$",
+                r"$\theta_1$",
+                r"$v_1$",
+                r"$\phi_1$",
+                r"$x_2$",
+                r"$y_2$",
+                r"$\theta_2$",
+                r"$v_2$",
+                r"$\phi_2$",
             ],
-            'state_labels': [
-                r'$x_1$', r'$y_1$', r'$\theta_1$', r'$v_1$', r'$\phi_1$',
-                r'$x_2$', r'$y_2$', r'$\theta_2$', r'$v_2$', r'$\phi_2$',
-            ],
-            'x_axis_idx': 0,
-            'y_axis_idx': 1,
-            'z_axis_idx': 2,
+            "x_axis_idx": 0,
+            "y_axis_idx": 1,
+            "z_axis_idx": 2,
         }
+
 
 class ReachAvoidRocketLanding(Dynamics):
     def __init__(self):
         super().__init__(
-            loss_type='brat_hjivi', set_mode='reach',
-            state_dim=6, input_dim=7, control_dim=2, disturbance_dim=0,
+            loss_type="brat_hjivi",
+            set_mode="reach",
+            state_dim=6,
+            input_dim=7,
+            control_dim=2,
+            disturbance_dim=0,
             state_mean=[0.0, 80.0, 0.0, 0.0, 0.0, 0.0],
-            state_var=[150.0, 70.0, 1.2*math.pi, 200.0, 200.0, 10.0],
+            state_var=[150.0, 70.0, 1.2 * math.pi, 200.0, 200.0, 10.0],
             value_mean=0.0,
             value_var=1.0,
             value_normto=0.02,
@@ -651,8 +840,10 @@ class ReachAvoidRocketLanding(Dynamics):
 
     def equivalent_wrapped_state(self, state):
         wrapped_state = torch.clone(state)
-        wrapped_state[..., 2] = (wrapped_state[..., 2] + math.pi) % (2*math.pi) - math.pi
-        return wrapped_state 
+        wrapped_state[..., 2] = (wrapped_state[..., 2] + math.pi) % (
+            2 * math.pi
+        ) - math.pi
+        return wrapped_state
 
     # \dot x = v_x
     # \dot y = v_y
@@ -665,22 +856,28 @@ class ReachAvoidRocketLanding(Dynamics):
         dsdt[..., 0] = state[..., 3]
         dsdt[..., 1] = state[..., 4]
         dsdt[..., 2] = state[..., 5]
-        dsdt[..., 3] = control[..., 0]*torch.cos(state[..., 2]) - control[..., 1]*torch.sin(state[..., 2])
-        dsdt[..., 4] = control[..., 0]*torch.sin(state[..., 2]) + control[..., 1]*torch.cos(state[..., 2]) - 9.81
-        dsdt[..., 5] = 0.3*control[..., 0]
+        dsdt[..., 3] = control[..., 0] * torch.cos(state[..., 2]) - control[
+            ..., 1
+        ] * torch.sin(state[..., 2])
+        dsdt[..., 4] = (
+            control[..., 0] * torch.sin(state[..., 2])
+            + control[..., 1] * torch.cos(state[..., 2])
+            - 9.81
+        )
+        dsdt[..., 5] = 0.3 * control[..., 0]
         return dsdt
 
     def reach_fn(self, state):
         # Only target set in the xy direction
         # Target set position in x direction
-        dist_x = torch.abs(state[..., 0]) - 20.0 #[-20, 150] boundary_fn range
+        dist_x = torch.abs(state[..., 0]) - 20.0  # [-20, 150] boundary_fn range
 
         # Target set position in y direction
-        dist_y = state[..., 1] - 20.0  #[-10, 130] boundary_fn range
+        dist_y = state[..., 1] - 20.0  # [-10, 130] boundary_fn range
 
         # First compute the target function as you normally would but then normalize it later.
         max_dist = torch.max(dist_x, dist_y)
-        return torch.where((max_dist >= 0), max_dist/150.0, max_dist/10.0)
+        return torch.where((max_dist >= 0), max_dist / 150.0, max_dist / 10.0)
 
     def avoid_fn(self, state):
         # distance to floor
@@ -697,7 +894,16 @@ class ReachAvoidRocketLanding(Dynamics):
         dist_top = state[..., 1] - wall_top
         dist_wall_x = torch.max(dist_left, dist_right)
         dist_wall_y = torch.max(dist_bottom, dist_top)
-        dist_wall = torch.norm(torch.cat((torch.max(torch.tensor(0), dist_wall_x).unsqueeze(-1), torch.max(torch.tensor(0), dist_wall_y).unsqueeze(-1)), dim=-1), dim=-1) + torch.min(torch.tensor(0), torch.max(dist_wall_x, dist_wall_y))
+        dist_wall = torch.norm(
+            torch.cat(
+                (
+                    torch.max(torch.tensor(0), dist_wall_x).unsqueeze(-1),
+                    torch.max(torch.tensor(0), dist_wall_y).unsqueeze(-1),
+                ),
+                dim=-1,
+            ),
+            dim=-1,
+        ) + torch.min(torch.tensor(0), torch.max(dist_wall_x, dist_wall_y))
 
         return torch.min(dist_y, dist_wall)
 
@@ -706,54 +912,86 @@ class ReachAvoidRocketLanding(Dynamics):
 
     def sample_target_state(self, num_samples):
         target_state_range = self.state_test_range()
-        target_state_range[0] = [-20, 20] # y in [-20, 20]
+        target_state_range[0] = [-20, 20]  # y in [-20, 20]
         target_state_range[1] = [10, 20]  # z in [10, 20]
         target_state_range = torch.tensor(target_state_range)
-        return target_state_range[:, 0] + torch.rand(num_samples, self.state_dim)*(target_state_range[:, 1] - target_state_range[:, 0])
+        return target_state_range[:, 0] + torch.rand(num_samples, self.state_dim) * (
+            target_state_range[:, 1] - target_state_range[:, 0]
+        )
 
     def cost_fn(self, state_traj):
-        # return min_t max{l(x(t)), max_k_up_to_t{-g(x(k))}}, where l(x) is reach_fn, g(x) is avoid_fn 
+        # return min_t max{l(x(t)), max_k_up_to_t{-g(x(k))}}, where l(x) is reach_fn, g(x) is avoid_fn
         reach_values = self.reach_fn(state_traj)
         avoid_values = self.avoid_fn(state_traj)
-        return torch.min(torch.maximum(reach_values, torch.cummax(-avoid_values, dim=-1).values), dim=-1).values
+        return torch.min(
+            torch.maximum(reach_values, torch.cummax(-avoid_values, dim=-1).values),
+            dim=-1,
+        ).values
 
     def hamiltonian(self, state, dvds):
         # Control Hamiltonian
-        u1_coeff = dvds[..., 3] * torch.cos(state[..., 2]) + dvds[..., 4] * torch.sin(state[..., 2]) + 0.3 * dvds[..., 5]
-        u2_coeff = -dvds[..., 3] * torch.sin(state[..., 2]) + dvds[..., 4] * torch.cos(state[..., 2])
+        u1_coeff = (
+            dvds[..., 3] * torch.cos(state[..., 2])
+            + dvds[..., 4] * torch.sin(state[..., 2])
+            + 0.3 * dvds[..., 5]
+        )
+        u2_coeff = -dvds[..., 3] * torch.sin(state[..., 2]) + dvds[..., 4] * torch.cos(
+            state[..., 2]
+        )
         ham_ctrl = -250.0 * torch.sqrt(u1_coeff * u1_coeff + u2_coeff * u2_coeff)
         # Constant Hamiltonian
-        ham_constant = dvds[..., 0] * state[..., 3] + dvds[..., 1] * state[..., 4] + \
-                      dvds[..., 2] * state[..., 5]  - dvds[..., 4] * 9.81
+        ham_constant = (
+            dvds[..., 0] * state[..., 3]
+            + dvds[..., 1] * state[..., 4]
+            + dvds[..., 2] * state[..., 5]
+            - dvds[..., 4] * 9.81
+        )
         # Compute the Hamiltonian
         ham_vehicle = ham_ctrl + ham_constant
         return ham_vehicle
 
     def optimal_control(self, state, dvds):
-        u1_coeff = dvds[..., 3] * torch.cos(state[..., 2]) + dvds[..., 4] * torch.sin(state[..., 2]) + 0.3 * dvds[..., 5]
-        u2_coeff = -dvds[..., 3] * torch.sin(state[..., 2]) + dvds[..., 4] * torch.cos(state[..., 2])
+        u1_coeff = (
+            dvds[..., 3] * torch.cos(state[..., 2])
+            + dvds[..., 4] * torch.sin(state[..., 2])
+            + 0.3 * dvds[..., 5]
+        )
+        u2_coeff = -dvds[..., 3] * torch.sin(state[..., 2]) + dvds[..., 4] * torch.cos(
+            state[..., 2]
+        )
         opt_angle = torch.atan2(u2_coeff, u1_coeff) + math.pi
-        return torch.cat((250.0 * torch.cos(opt_angle)[..., None], 250.0 * torch.sin(opt_angle)[..., None]), dim=-1)
+        return torch.cat(
+            (
+                250.0 * torch.cos(opt_angle)[..., None],
+                250.0 * torch.sin(opt_angle)[..., None],
+            ),
+            dim=-1,
+        )
 
     def optimal_disturbance(self, state, dvds):
         return 0
 
     def plot_config(self):
         return {
-            'state_slices': [-100, 120, 0, 150, -5, 0.0],
-            'state_labels': ['x', 'y', r'$\theta$', r'$v_x$', r'$v_y$', r'$\omega'],
-            'x_axis_idx': 0,
-            'y_axis_idx': 1,
-            'z_axis_idx': 4,
+            "state_slices": [-100, 120, 0, 150, -5, 0.0],
+            "state_labels": ["x", "y", r"$\theta$", r"$v_x$", r"$v_y$", r"$\omega"],
+            "x_axis_idx": 0,
+            "y_axis_idx": 1,
+            "z_axis_idx": 4,
         }
+
 
 class RocketLanding(Dynamics):
     def __init__(self):
         super().__init__(
-            loss_type='brt_hjivi', set_mode='reach',
-            state_dim=6, input_dim=8, control_dim=2, disturbance_dim=0,
+            loss_type="brt_hjivi",
+            set_mode="reach",
+            state_dim=6,
+            input_dim=8,
+            control_dim=2,
+            disturbance_dim=0,
             state_mean=[0.0, 80.0, 0.0, 0.0, 0.0, 0.0],
-            state_var=[150.0, 70.0, 1.2*math.pi, 200.0, 200.0, 10.0],
+            state_var=[150.0, 70.0, 1.2 * math.pi, 200.0, 200.0, 10.0],
             value_mean=0.0,
             value_var=1.0,
             value_normto=0.02,
@@ -764,41 +1002,60 @@ class RocketLanding(Dynamics):
     def input_to_coord(self, input):
         input = input[..., :-1]
         coord = input.clone()
-        coord[..., 1:] = (input[..., 1:] * self.state_var.to(device=input.device)) + self.state_mean.to(device=input.device)
+        coord[..., 1:] = (
+            input[..., 1:] * self.state_var.to(device=input.device)
+        ) + self.state_mean.to(device=input.device)
         return coord
 
     # convert real coord to model input
     def coord_to_input(self, coord):
         input = coord.clone()
-        input[..., 1:] = (coord[..., 1:] - self.state_mean.to(device=coord.device)) / self.state_var.to(device=coord.device)
-        input = torch.cat((input, torch.zeros((*input.shape[:-1], 1), device=input.device)), dim=-1)
+        input[..., 1:] = (
+            coord[..., 1:] - self.state_mean.to(device=coord.device)
+        ) / self.state_var.to(device=coord.device)
+        input = torch.cat(
+            (input, torch.zeros((*input.shape[:-1], 1), device=input.device)), dim=-1
+        )
         return input
 
     # convert model io to real value
     def io_to_value(self, input, output):
-        if self.deepreach_model=="diff":
-            return (output * self.value_var / self.value_normto) + self.boundary_fn(self.input_to_coord(input)[..., 1:])
+        if self.deepreach_model == "diff":
+            return (output * self.value_var / self.value_normto) + self.boundary_fn(
+                self.input_to_coord(input)[..., 1:]
+            )
         else:
             return (output * self.value_var / self.value_normto) + self.value_mean
 
     # convert model io to real dv
     def io_to_dv(self, input, output):
-        dodi = diff_operators.jacobian(output.unsqueeze(dim=-1), input)[0].squeeze(dim=-2)[..., :-1]
+        dodi = diff_operators.jacobian(output.unsqueeze(dim=-1), input)[0].squeeze(
+            dim=-2
+        )[..., :-1]
 
-        if self.deepreach_model=="diff":
+        if self.deepreach_model == "diff":
             dvdt = (self.value_var / self.value_normto) * dodi[..., 0]
 
-            dvds_term1 = (self.value_var / self.value_normto / self.state_var.to(device=dodi.device)) * dodi[..., 1:]
+            dvds_term1 = (
+                self.value_var
+                / self.value_normto
+                / self.state_var.to(device=dodi.device)
+            ) * dodi[..., 1:]
             state = self.input_to_coord(input)[..., 1:]
-            dvds_term2 = diff_operators.jacobian(self.boundary_fn(state).unsqueeze(dim=-1), state)[0].squeeze(dim=-2)
+            dvds_term2 = diff_operators.jacobian(
+                self.boundary_fn(state).unsqueeze(dim=-1), state
+            )[0].squeeze(dim=-2)
             dvds = dvds_term1 + dvds_term2
-        
+
         else:
             dvdt = (self.value_var / self.value_normto) * dodi[..., 0]
-            dvds = (self.value_var / self.value_normto / self.state_var.to(device=dodi.device)) * dodi[..., 1:]
-        
-        return torch.cat((dvdt.unsqueeze(dim=-1), dvds), dim=-1)
+            dvds = (
+                self.value_var
+                / self.value_normto
+                / self.state_var.to(device=dodi.device)
+            ) * dodi[..., 1:]
 
+        return torch.cat((dvdt.unsqueeze(dim=-1), dvds), dim=-1)
 
     def state_test_range(self):
         return [
@@ -812,8 +1069,10 @@ class RocketLanding(Dynamics):
 
     def equivalent_wrapped_state(self, state):
         wrapped_state = torch.clone(state)
-        wrapped_state[..., 2] = (wrapped_state[..., 2] + math.pi) % (2*math.pi) - math.pi
-        return wrapped_state 
+        wrapped_state[..., 2] = (wrapped_state[..., 2] + math.pi) % (
+            2 * math.pi
+        ) - math.pi
+        return wrapped_state
 
     # \dot x = v_x
     # \dot y = v_y
@@ -826,85 +1085,119 @@ class RocketLanding(Dynamics):
         dsdt[..., 0] = state[..., 3]
         dsdt[..., 1] = state[..., 4]
         dsdt[..., 2] = state[..., 5]
-        dsdt[..., 3] = control[..., 0]*torch.cos(state[..., 2]) - control[..., 1]*torch.sin(state[..., 2])
-        dsdt[..., 4] = control[..., 0]*torch.sin(state[..., 2]) + control[..., 1]*torch.cos(state[..., 2]) - 9.81
-        dsdt[..., 5] = 0.3*control[..., 0]
+        dsdt[..., 3] = control[..., 0] * torch.cos(state[..., 2]) - control[
+            ..., 1
+        ] * torch.sin(state[..., 2])
+        dsdt[..., 4] = (
+            control[..., 0] * torch.sin(state[..., 2])
+            + control[..., 1] * torch.cos(state[..., 2])
+            - 9.81
+        )
+        dsdt[..., 5] = 0.3 * control[..., 0]
         return dsdt
 
     def boundary_fn(self, state):
         # Only target set in the yz direction
         # Target set position in y direction
-        dist_y = torch.abs(state[..., 0]) - 20.0 #[-20, 150] boundary_fn range
+        dist_y = torch.abs(state[..., 0]) - 20.0  # [-20, 150] boundary_fn range
 
         # Target set position in z direction
-        dist_z = state[..., 1] - 20.0  #[-10, 130] boundary_fn range
+        dist_z = state[..., 1] - 20.0  # [-10, 130] boundary_fn range
 
         # First compute the l(x) as you normally would but then normalize it later.
         lx = torch.max(dist_y, dist_z)
-        return torch.where((lx >= 0), lx/150.0, lx/10.0)
+        return torch.where((lx >= 0), lx / 150.0, lx / 10.0)
 
     def sample_target_state(self, num_samples):
         target_state_range = self.state_test_range()
-        target_state_range[0] = [-20, 20] # y in [-20, 20]
+        target_state_range[0] = [-20, 20]  # y in [-20, 20]
         target_state_range[1] = [10, 20]  # z in [10, 20]
         target_state_range = torch.tensor(target_state_range)
-        return target_state_range[:, 0] + torch.rand(num_samples, self.state_dim)*(target_state_range[:, 1] - target_state_range[:, 0])
+        return target_state_range[:, 0] + torch.rand(num_samples, self.state_dim) * (
+            target_state_range[:, 1] - target_state_range[:, 0]
+        )
 
     def cost_fn(self, state_traj):
         return torch.min(self.boundary_fn(state_traj), dim=-1).values
 
     def hamiltonian(self, state, dvds):
         # Control Hamiltonian
-        u1_coeff = dvds[..., 3] * torch.cos(state[..., 2]) + dvds[..., 4] * torch.sin(state[..., 2]) + 0.3 * dvds[..., 5]
-        u2_coeff = -dvds[..., 3] * torch.sin(state[..., 2]) + dvds[..., 4] * torch.cos(state[..., 2])
+        u1_coeff = (
+            dvds[..., 3] * torch.cos(state[..., 2])
+            + dvds[..., 4] * torch.sin(state[..., 2])
+            + 0.3 * dvds[..., 5]
+        )
+        u2_coeff = -dvds[..., 3] * torch.sin(state[..., 2]) + dvds[..., 4] * torch.cos(
+            state[..., 2]
+        )
         ham_ctrl = -250.0 * torch.sqrt(u1_coeff * u1_coeff + u2_coeff * u2_coeff)
         # Constant Hamiltonian
-        ham_constant = dvds[..., 0] * state[..., 3] + dvds[..., 1] * state[..., 4] + \
-                      dvds[..., 2] * state[..., 5]  - dvds[..., 4] * 9.81
+        ham_constant = (
+            dvds[..., 0] * state[..., 3]
+            + dvds[..., 1] * state[..., 4]
+            + dvds[..., 2] * state[..., 5]
+            - dvds[..., 4] * 9.81
+        )
         # Compute the Hamiltonian
         ham_vehicle = ham_ctrl + ham_constant
         return ham_vehicle
-    
+
     def optimal_control(self, state, dvds):
-        u1_coeff = dvds[..., 3] * torch.cos(state[..., 2]) + dvds[..., 4] * torch.sin(state[..., 2]) + 0.3 * dvds[..., 5]
-        u2_coeff = -dvds[..., 3] * torch.sin(state[..., 2]) + dvds[..., 4] * torch.cos(state[..., 2])
+        u1_coeff = (
+            dvds[..., 3] * torch.cos(state[..., 2])
+            + dvds[..., 4] * torch.sin(state[..., 2])
+            + 0.3 * dvds[..., 5]
+        )
+        u2_coeff = -dvds[..., 3] * torch.sin(state[..., 2]) + dvds[..., 4] * torch.cos(
+            state[..., 2]
+        )
         opt_angle = torch.atan2(u2_coeff, u1_coeff) + math.pi
-        return torch.cat((250.0 * torch.cos(opt_angle)[..., None], 250.0 * torch.sin(opt_angle)[..., None]), dim=-1)
+        return torch.cat(
+            (
+                250.0 * torch.cos(opt_angle)[..., None],
+                250.0 * torch.sin(opt_angle)[..., None],
+            ),
+            dim=-1,
+        )
 
     def optimal_disturbance(self, state, dvds):
         return 0
 
     def plot_config(self):
         return {
-            'state_slices': [-100, 120, 0, 150, -5, 0.0],
-            'state_labels': ['x', 'y', r'$\theta$', r'$v_x$', r'$v_y$', r'$\omega'],
-            'x_axis_idx': 0,
-            'y_axis_idx': 1,
-            'z_axis_idx': 4,
+            "state_slices": [-100, 120, 0, 150, -5, 0.0],
+            "state_labels": ["x", "y", r"$\theta$", r"$v_x$", r"$v_y$", r"$\omega"],
+            "x_axis_idx": 0,
+            "y_axis_idx": 1,
+            "z_axis_idx": 4,
         }
 
+
 class Quadrotor(Dynamics):
-    def __init__(self, collisionR:float, thrust_max:float, set_mode:str):
+    def __init__(self, collisionR: float, thrust_max: float, set_mode: str):
         self.thrust_max = thrust_max
-        self.m=1 #mass
-        self.arm_l=0.17
-        self.CT=1
-        self.CM=0.016
-        self.Gz=-9.8
+        self.m = 1  # mass
+        self.arm_l = 0.17
+        self.CT = 1
+        self.CM = 0.016
+        self.Gz = -9.8
 
         self.thrust_max = thrust_max
         self.collisionR = collisionR
 
-
         super().__init__(
-            loss_type='brt_hjivi', set_mode=set_mode,
-            state_dim=13, input_dim=14, control_dim=4, disturbance_dim=0,
-            state_mean=[0 for i in range(13)], 
-            state_var=[1.5, 1.5, 1.5, 1, 1, 1, 1, 10, 10 ,10 ,10 ,10 ,10],
-            value_mean=(math.sqrt(1.5**2+1.5**2+1.5**2)-2*self.collisionR)/2, 
-            value_var=math.sqrt(1.5**2+1.5**2+1.5**2), 
+            loss_type="brt_hjivi",
+            set_mode=set_mode,
+            state_dim=13,
+            input_dim=14,
+            control_dim=4,
+            disturbance_dim=0,
+            state_mean=[0 for i in range(13)],
+            state_var=[1.5, 1.5, 1.5, 1, 1, 1, 1, 10, 10, 10, 10, 10, 10],
+            value_mean=(math.sqrt(1.5**2 + 1.5**2 + 1.5**2) - 2 * self.collisionR) / 2,
+            value_var=math.sqrt(1.5**2 + 1.5**2 + 1.5**2),
             value_normto=0.02,
-            deepreach_model="exact"
+            deepreach_model="exact",
         )
 
     def state_test_range(self):
@@ -943,26 +1236,39 @@ class Quadrotor(Dynamics):
         wx = state[..., 10] * 1.0
         wy = state[..., 11] * 1.0
         wz = state[..., 12] * 1.0
-        u1 = control[...,0] * 1.0
-        u2 = control[...,1] * 1.0
-        u3 = control[...,2] * 1.0
-        u4 = control[...,3] * 1.0
-
+        u1 = control[..., 0] * 1.0
+        u2 = control[..., 1] * 1.0
+        u3 = control[..., 2] * 1.0
+        u4 = control[..., 3] * 1.0
 
         dsdt = torch.zeros_like(state)
         dsdt[..., 0] = vx
         dsdt[..., 1] = vy
         dsdt[..., 2] = vz
-        dsdt[..., 3] = -(wx*qx+wy*qy+wz*qz)/2.0 
-        dsdt[..., 4] =  (wx*qw+wz*qy-wy*qz)/2.0
-        dsdt[..., 5] = (wy*qw-wz*qx+wx*qz)/2.0
-        dsdt[..., 6] = (wz*qw+wy*qx-wx*qy)/2.0
-        dsdt[..., 7] = 2*(qw*qy+qx*qz)*self.CT/self.m*(u1+u2+u3+u4)
-        dsdt[..., 8] =2*(-qw*qx+qy*qz)*self.CT/self.m*(u1+u2+u3+u4)
-        dsdt[..., 9] =self.Gz+(1-2*torch.pow(qx,2)-2*torch.pow(qy,2))*self.CT/self.m*(u1+u2+u3+u4)
-        dsdt[..., 10] = 4*math.sqrt(2)*self.CT*(u1-u2-u3+u4)/(3*self.arm_l*self.m)-5*wy*wz/9.0
-        dsdt[..., 11] = 4*math.sqrt(2)*self.CT*(-u1-u2+u3+u4)/(3*self.arm_l*self.m)+5*wx*wz/9.0
-        dsdt[..., 12] =12*self.CT*self.CM/(7*self.arm_l**2*self.m)*(u1-u2+u3-u4)
+        dsdt[..., 3] = -(wx * qx + wy * qy + wz * qz) / 2.0
+        dsdt[..., 4] = (wx * qw + wz * qy - wy * qz) / 2.0
+        dsdt[..., 5] = (wy * qw - wz * qx + wx * qz) / 2.0
+        dsdt[..., 6] = (wz * qw + wy * qx - wx * qy) / 2.0
+        dsdt[..., 7] = 2 * (qw * qy + qx * qz) * self.CT / self.m * (u1 + u2 + u3 + u4)
+        dsdt[..., 8] = 2 * (-qw * qx + qy * qz) * self.CT / self.m * (u1 + u2 + u3 + u4)
+        dsdt[..., 9] = self.Gz + (
+            1 - 2 * torch.pow(qx, 2) - 2 * torch.pow(qy, 2)
+        ) * self.CT / self.m * (u1 + u2 + u3 + u4)
+        dsdt[..., 10] = (
+            4 * math.sqrt(2) * self.CT * (u1 - u2 - u3 + u4) / (3 * self.arm_l * self.m)
+            - 5 * wy * wz / 9.0
+        )
+        dsdt[..., 11] = (
+            4
+            * math.sqrt(2)
+            * self.CT
+            * (-u1 - u2 + u3 + u4)
+            / (3 * self.arm_l * self.m)
+            + 5 * wx * wz / 9.0
+        )
+        dsdt[..., 12] = (
+            12 * self.CT * self.CM / (7 * self.arm_l**2 * self.m) * (u1 - u2 + u3 - u4)
+        )
         return dsdt
 
     def boundary_fn(self, state):
@@ -975,8 +1281,1145 @@ class Quadrotor(Dynamics):
         return torch.min(self.boundary_fn(state_traj), dim=-1).values
 
     def hamiltonian(self, state, dvds):
-        if self.set_mode == 'reach':
+        if self.set_mode == "reach":
             raise NotImplementedError
+
+        elif self.set_mode == "avoid":
+            qw = state[..., 3] * 1.0
+            qx = state[..., 4] * 1.0
+            qy = state[..., 5] * 1.0
+            qz = state[..., 6] * 1.0
+            vx = state[..., 7] * 1.0
+            vy = state[..., 8] * 1.0
+            vz = state[..., 9] * 1.0
+            wx = state[..., 10] * 1.0
+            wy = state[..., 11] * 1.0
+            wz = state[..., 12] * 1.0
+
+            C1 = 2 * (qw * qy + qx * qz) * self.CT / self.m
+            C2 = 2 * (-qw * qx + qy * qz) * self.CT / self.m
+            C3 = (1 - 2 * torch.pow(qx, 2) - 2 * torch.pow(qy, 2)) * self.CT / self.m
+            C4 = 4 * math.sqrt(2) * self.CT / (3 * self.arm_l * self.m)
+            C5 = 4 * math.sqrt(2) * self.CT / (3 * self.arm_l * self.m)
+            C6 = 12 * self.CT * self.CM / (7 * self.arm_l**2 * self.m)
+
+            # Compute the hamiltonian for the quadrotor
+            ham = dvds[..., 0] * vx + dvds[..., 1] * vy + dvds[..., 2] * vz
+            ham += -dvds[..., 3] * (wx * qx + wy * qy + wz * qz) / 2.0
+            ham += dvds[..., 4] * (wx * qw + wz * qy - wy * qz) / 2.0
+            ham += dvds[..., 5] * (wy * qw - wz * qx + wx * qz) / 2.0
+            ham += dvds[..., 6] * (wz * qw + wy * qx - wx * qy) / 2.0
+            ham += dvds[..., 9] * -9.8
+            ham += (
+                -dvds[..., 10] * 5 * wy * wz / 9.0 + dvds[..., 11] * 5 * wx * wz / 9.0
+            )
+
+            ham += (
+                torch.abs(
+                    dvds[..., 7] * C1
+                    + dvds[..., 8] * C2
+                    + dvds[..., 9] * C3
+                    + dvds[..., 10] * C4
+                    - dvds[..., 11] * C5
+                    + dvds[..., 12] * C6
+                )
+                * self.thrust_max
+            )
+
+            ham += (
+                torch.abs(
+                    dvds[..., 7] * C1
+                    + dvds[..., 8] * C2
+                    + dvds[..., 9] * C3
+                    - dvds[..., 10] * C4
+                    - dvds[..., 11] * C5
+                    - dvds[..., 12] * C6
+                )
+                * self.thrust_max
+            )
+
+            ham += (
+                torch.abs(
+                    dvds[..., 7] * C1
+                    + dvds[..., 8] * C2
+                    + dvds[..., 9] * C3
+                    - dvds[..., 10] * C4
+                    + dvds[..., 11] * C5
+                    + dvds[..., 12] * C6
+                )
+                * self.thrust_max
+            )
+
+            ham += (
+                torch.abs(
+                    dvds[..., 7] * C1
+                    + dvds[..., 8] * C2
+                    + dvds[..., 9] * C3
+                    + dvds[..., 10] * C4
+                    + dvds[..., 11] * C5
+                    - dvds[..., 12] * C6
+                )
+                * self.thrust_max
+            )
+
+            return ham
+
+    def optimal_control(self, state, dvds):
+        if self.set_mode == "reach":
+            raise NotImplementedError
+        elif self.set_mode == "avoid":
+            qw = state[..., 3] * 1.0
+            qx = state[..., 4] * 1.0
+            qy = state[..., 5] * 1.0
+            qz = state[..., 6] * 1.0
+
+            C1 = 2 * (qw * qy + qx * qz) * self.CT / self.m
+            C2 = 2 * (-qw * qx + qy * qz) * self.CT / self.m
+            C3 = (1 - 2 * torch.pow(qx, 2) - 2 * torch.pow(qy, 2)) * self.CT / self.m
+            C4 = 4 * math.sqrt(2) * self.CT / (3 * self.arm_l * self.m)
+            C5 = 4 * math.sqrt(2) * self.CT / (3 * self.arm_l * self.m)
+            C6 = 12 * self.CT * self.CM / (7 * self.arm_l**2 * self.m)
+
+            u1 = self.thrust_max * torch.sign(
+                dvds[..., 7] * C1
+                + dvds[..., 8] * C2
+                + dvds[..., 9] * C3
+                + dvds[..., 10] * C4
+                - dvds[..., 11] * C5
+                + dvds[..., 12] * C6
+            )
+            u2 = self.thrust_max * torch.sign(
+                dvds[..., 7] * C1
+                + dvds[..., 8] * C2
+                + dvds[..., 9] * C3
+                - dvds[..., 10] * C4
+                - dvds[..., 11] * C5
+                - dvds[..., 12] * C6
+            )
+            u3 = self.thrust_max * torch.sign(
+                dvds[..., 7] * C1
+                + dvds[..., 8] * C2
+                + dvds[..., 9] * C3
+                - dvds[..., 10] * C4
+                + dvds[..., 11] * C5
+                + dvds[..., 12] * C6
+            )
+            u4 = self.thrust_max * torch.sign(
+                dvds[..., 7] * C1
+                + dvds[..., 8] * C2
+                + dvds[..., 9] * C3
+                + dvds[..., 10] * C4
+                + dvds[..., 11] * C5
+                - dvds[..., 12] * C6
+            )
+
+        return torch.cat(
+            (u1[..., None], u2[..., None], u3[..., None], u4[..., None]), dim=-1
+        )
+
+    def optimal_disturbance(self, state, dvds):
+        return 0
+
+    def plot_config(self):
+        return {
+            "state_slices": [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            "state_labels": [
+                "x",
+                "y",
+                "z",
+                "qw",
+                "qx",
+                "qy",
+                "qz",
+                "vx",
+                "vy",
+                "vz",
+                "wx",
+                "wy",
+                "wz",
+            ],
+            "x_axis_idx": 0,
+            "y_axis_idx": 2,
+            "z_axis_idx": 7,
+        }
+
+
+class MultiVehicleCollision(Dynamics):
+    def __init__(self):
+        self.angle_alpha_factor = 1.2
+        self.velocity = 0.6
+        self.omega_max = 1.1
+        self.collisionR = 0.25
+        super().__init__(
+            loss_type="brt_hjivi",
+            set_mode="avoid",
+            state_dim=9,
+            input_dim=10,
+            control_dim=3,
+            disturbance_dim=0,
+            state_mean=[
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ],
+            state_var=[
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                self.angle_alpha_factor * math.pi,
+                self.angle_alpha_factor * math.pi,
+                self.angle_alpha_factor * math.pi,
+            ],
+            value_mean=0.25,
+            value_var=0.5,
+            value_normto=0.02,
+            deepreach_model="exact",
+        )
+
+    def state_test_range(self):
+        return [
+            [-1, 1],
+            [-1, 1],
+            [-1, 1],
+            [-1, 1],
+            [-1, 1],
+            [-1, 1],
+            [-math.pi, math.pi],
+            [-math.pi, math.pi],
+            [-math.pi, math.pi],
+        ]
+
+    def equivalent_wrapped_state(self, state):
+        wrapped_state = torch.clone(state)
+        wrapped_state[..., 6] = (wrapped_state[..., 6] + math.pi) % (
+            2 * math.pi
+        ) - math.pi
+        wrapped_state[..., 7] = (wrapped_state[..., 7] + math.pi) % (
+            2 * math.pi
+        ) - math.pi
+        wrapped_state[..., 8] = (wrapped_state[..., 8] + math.pi) % (
+            2 * math.pi
+        ) - math.pi
+        return wrapped_state
+
+    # dynamics (per car)
+    # \dot x    = v \cos \theta
+    # \dot y    = v \sin \theta
+    # \dot \theta = u
+    def dsdt(self, state, control, disturbance):
+        dsdt = torch.zeros_like(state)
+        dsdt[..., 0] = self.velocity * torch.cos(state[..., 6])
+        dsdt[..., 1] = self.velocity * torch.sin(state[..., 6])
+        dsdt[..., 2] = self.velocity * torch.cos(state[..., 7])
+        dsdt[..., 3] = self.velocity * torch.sin(state[..., 7])
+        dsdt[..., 4] = self.velocity * torch.cos(state[..., 8])
+        dsdt[..., 5] = self.velocity * torch.sin(state[..., 8])
+        dsdt[..., 6] = control[..., 0]
+        dsdt[..., 7] = control[..., 1]
+        dsdt[..., 8] = control[..., 2]
+        return dsdt
+
+    def boundary_fn(self, state):
+        boundary_values = (
+            torch.norm(state[..., 0:2] - state[..., 2:4], dim=-1) - self.collisionR
+        )
+        for i in range(1, 2):
+            boundary_values_current = (
+                torch.norm(
+                    state[..., 0:2] - state[..., 2 * (i + 1) : 2 * (i + 1) + 2], dim=-1
+                )
+                - self.collisionR
+            )
+            boundary_values = torch.min(boundary_values, boundary_values_current)
+        # Collision cost between the evaders themselves
+        for i in range(2):
+            for j in range(i + 1, 2):
+                evader1_coords_index = (i + 1) * 2
+                evader2_coords_index = (j + 1) * 2
+                boundary_values_current = (
+                    torch.norm(
+                        state[..., evader1_coords_index : evader1_coords_index + 2]
+                        - state[..., evader2_coords_index : evader2_coords_index + 2],
+                        dim=-1,
+                    )
+                    - self.collisionR
+                )
+                boundary_values = torch.min(boundary_values, boundary_values_current)
+        return boundary_values
+
+    def sample_target_state(self, num_samples):
+        raise NotImplementedError
+
+    def cost_fn(self, state_traj):
+        return torch.min(self.boundary_fn(state_traj), dim=-1).values
+
+    def hamiltonian(self, state, dvds):
+        # Compute the hamiltonian for the ego vehicle
+        ham = self.velocity * (
+            torch.cos(state[..., 6]) * dvds[..., 0]
+            + torch.sin(state[..., 6]) * dvds[..., 1]
+        ) + self.omega_max * torch.abs(dvds[..., 6])
+        # Hamiltonian effect due to other vehicles
+        ham += self.velocity * (
+            torch.cos(state[..., 7]) * dvds[..., 2]
+            + torch.sin(state[..., 7]) * dvds[..., 3]
+        ) + self.omega_max * torch.abs(dvds[..., 7])
+        ham += self.velocity * (
+            torch.cos(state[..., 8]) * dvds[..., 4]
+            + torch.sin(state[..., 8]) * dvds[..., 5]
+        ) + self.omega_max * torch.abs(dvds[..., 8])
+        return ham
+
+    def optimal_control(self, state, dvds):
+        return self.omega_max * torch.sign(dvds[..., [6, 7, 8]])
+
+    def optimal_disturbance(self, state, dvds):
+        return 0
+
+    def plot_config(self):
+        return {
+            "state_slices": [
+                0,
+                0,
+                -0.4,
+                0,
+                0.4,
+                0,
+                math.pi / 2,
+                math.pi / 4,
+                3 * math.pi / 4,
+            ],
+            "state_labels": [
+                r"$x_1$",
+                r"$y_1$",
+                r"$x_2$",
+                r"$y_2$",
+                r"$x_3$",
+                r"$y_3$",
+                r"$\theta_1$",
+                r"$\theta_2$",
+                r"$\theta_3$",
+            ],
+            "x_axis_idx": 0,
+            "y_axis_idx": 1,
+            "z_axis_idx": 6,
+        }
+
+
+class PlanarQuadrotorEqBRAT(Dynamics):
+    def __init__(self, thrust_max: float, avoid_only: bool, avoid_fn_weight: float):
+        self.thrust_max = thrust_max
+        self.mass = 1  # mass
+        self.J = 1  # inertia
+        self.arm_l = 0.2
+        self.Gz = -9.8
+
+        self.thrust_max = thrust_max
+
+        self.goal_vx = [-0.05, 0.05]
+        self.goal_vy = [-0.05, 0.05]
+
+        self.goal_w = [-0.05, 0.05]
+        self.goal_theta = [-0.05, 0.05]
+
+        self.avoid_only = avoid_only
+        self.avoid_fn_weight = avoid_fn_weight
+
+        super().__init__(
+            loss_type="brt_hjivi" if self.avoid_only else "brat_hjivi",
+            set_mode="avoid" if self.avoid_only else "reach",  # input dim also time
+            state_dim=6,
+            input_dim=7,
+            control_dim=2,
+            disturbance_dim=0,
+            state_mean=[0 for i in range(6)],
+            state_var=[10, 5, math.pi / 2, 10, 10, 2 * math.pi * 20],
+            value_mean=0,
+            value_var=1,
+            value_normto=0.02,
+            deepreach_model="exact",
+        )
+
+    def state_test_range(self):
+        return [
+            [
+                self.state_mean[0] - self.state_var[0],
+                self.state_mean[0] + self.state_var[0],
+            ],
+            [
+                self.state_mean[1] - self.state_var[1],
+                self.state_mean[1] + self.state_var[1],
+            ],
+            [
+                self.state_mean[2] - self.state_var[2],
+                self.state_mean[2] + self.state_var[2],
+            ],
+            [
+                self.state_mean[3] - self.state_var[3],
+                self.state_mean[3] + self.state_var[3],
+            ],
+            [
+                self.state_mean[4] - self.state_var[4],
+                self.state_mean[4] + self.state_var[4],
+            ],
+            [
+                self.state_mean[5] - self.state_var[5],
+                self.state_mean[5] + self.state_var[5],
+            ],
+        ]
+
+    def equivalent_wrapped_state(self, state):
+        wrapped_state = torch.clone(state)
+        return wrapped_state
+
+    def dsdt(self, state, control, disturbance):
+        vx = state[..., 3] * 1.0
+        vy = state[..., 4] * 1.00
+        w = state[..., 5] * 1.0
+        u1 = control[..., 0] * 1.0
+        u2 = control[..., 1] * 1.0
+
+        dsdt = torch.zeros_like(state)
+        dsdt[..., 0] = vx
+        dsdt[..., 1] = vy
+        dsdt[..., 2] = w
+        dsdt[..., 3] = -(u1 + u2) * torch.sin(state[..., 2]) / self.mass
+        dsdt[..., 4] = ((u1 + u2) * torch.cos(state[..., 2]) + self.Gz) / self.mass
+        dsdt[..., 5] = (u1 - u2) * self.arm_l / self.J
+        return dsdt
+
+    def reach_fn(self, state):  # where < 0 reached
+        if self.avoid_only:
+            raise RuntimeError
+
+        upper_x = torch.tensor([self.goal_vx[0]], device=state.device)
+        lower_x = torch.tensor([self.goal_vx[1]], device=state.device)
+        upper_y = torch.tensor([self.goal_vy[0]], device=state.device)
+        lower_y = torch.tensor([self.goal_vy[1]], device=state.device)
+        upper_theta = torch.tensor([self.goal_theta[0]], device=state.device)
+        lower_theta = torch.tensor([self.goal_theta[1]], device=state.device)
+        upper_w = torch.tensor([self.goal_w[0]], device=state.device)
+        lower_w = torch.tensor([self.goal_w[1]], device=state.device)
+
+        u_x = state[..., 3] - upper_x
+        l_x = lower_x - state[..., 3]
+        u_y = state[..., 4] - upper_y
+        l_y = lower_y - state[..., 4]
+        # u_theta = state[..., 2] - upper_theta
+        # l_theta = lower_theta - state[..., 2]
+        # u_w = state[..., 5] - upper_w
+        # l_w = lower_w - state[..., 5]
+
+        return torch.max(torch.stack([u_x, l_x, u_y, l_y],dim=0),dim=0).values
+
+    def avoid_fn(self, state):  # if violation, > 0
+        # distance from x,y,thaeta lim
+        dist_u =  torch.tensor(
+            [self.state_var[0], self.state_var[1]*0.75, self.state_var[2]],
+            device=state.device,
+        ) - state[..., :3]
+        dist_l = state[..., :3] + torch.tensor(
+            [[-self.state_var[0], -self.state_var[1], -self.state_var[2]]],
+            device=state.device,
+        )
+
+        return self.avoid_fn_weight * torch.max(torch.cat([dist_u,dist_l],dim=1),dim=1).values
+
+    def boundary_fn(self, state):
+        if len(state.shape)== 3 and state.shape[0] == 1:
+            state = state.squeeze(0)
+        if self.avoid_only:
+            return self.avoid_fn(state)
+        else:
+            return torch.maximum(self.reach_fn(state), -self.avoid_fn(state)) #return self.reach_fn(state) #  
+
+    def sample_target_state(self, num_samples):
+        raise NotImplementedError
+
+    def cost_fn(self, state_traj):
+        # return min_t max{l(x(t)), max_k_up_to_t{-g(x(k))}}, where l(x) is reach_fn, g(x) is avoid_fn
+        reach_values = self.reach_fn(state_traj)
+        avoid_values = self.avoid_fn(state_traj)
+        # return torch.min(torch.clamp(reach_values, min=torch.max(-avoid_values, dim=-1).values.unsqueeze(-1)),dim=-1).values
+        return torch.min(
+            torch.maximum(reach_values, torch.cummax(-avoid_values, dim=-1).values),
+            dim=-1,
+        ).values
+
+    def hamiltonian(self, state, dvds):
+        if self.set_mode == "reach":
+            s_x = state[..., 0] * 1.0
+            s_y = state[..., 1] * 1.0
+            s_th = state[..., 2] * 1.0
+            s_vx = state[..., 3] * 1.0
+            s_vy = state[..., 4] * 1.0
+            s_w = state[..., 5] * 1.0
+
+            u = self.optimal_control(state, dvds)
+            ham = (
+                dvds[..., 0] * s_vx
+                + dvds[..., 1] * (s_vy + self.Gz / self.mass)
+                + dvds[..., 2] * s_th
+                + torch.abs(
+                    - dvds[..., 3] * torch.sin(s_th) / self.mass
+                    + dvds[..., 4] * torch.cos(s_th) / self.mass
+                    + dvds[...,5] * self.arm_l / self.J
+                )
+                * u[..., 0]
+                + torch.abs(
+                    - dvds[..., 3] * torch.sin(s_th) / self.mass
+                    + dvds[..., 4] * torch.cos(s_th) / self.mass
+                    - dvds[...,5] * self.arm_l / self.J
+                )
+                * u[..., 1]
+            )
+
+        elif self.set_mode == "avoid":
+            raise NotImplementedError
+        
+        return ham
+
+    def optimal_control(self, state, dvds):
+        if self.set_mode == "reach":
+            s_x = state[..., 0] * 1.0
+            s_y = state[..., 1] * 1.0
+            s_th = state[..., 2] * 1.0
+            s_vx = state[..., 3] * 1.0
+            s_vy = state[..., 4] * 1.0
+            s_w = state[..., 5] * 1.0
+
+            u1 = -self.thrust_max * torch.sign(
+                -dvds[..., 3] * torch.sin(s_th) / self.mass
+                + dvds[..., 4] * torch.cos(s_th) / self.mass
+                + dvds[..., 5] * self.arm_l / self.J
+            )
+            u2 = -self.thrust_max * torch.sign(
+                -dvds[..., 3] * torch.sin(s_th) / self.mass
+                + dvds[..., 4] * torch.cos(s_th) / self.mass
+                - dvds[..., 5] * self.arm_l / self.J
+            )
+
+        elif self.set_mode == "avoid":
+            raise NotImplementedError
+
+        return torch.cat((u1[..., None], u2[..., None]), dim=-1)
+    
+    def equivalent_wrapped_state(self, state):
+        wrapped_state = torch.clone(state)
+        wrapped_state[..., 2] = (wrapped_state[..., 2] + math.pi) % (
+            2 * math.pi
+        ) - math.pi
+        
+        return wrapped_state
+
+    def optimal_disturbance(self, state, dvds):
+        return 0
+
+    def plot_config(self):
+        return {
+            "state_slices": [0, 0, 0, 0, 0, 0],
+            "state_labels": [
+                "x",
+                "y",
+                r"$\theta$",
+                "vx",
+                "vy",
+                "w"
+            ],
+            "x_axis_idx": 3,
+            "y_axis_idx": 4,
+            "z_axis_idx": 1,
+        }
+    
+class QuadrotorReach(Dynamics):
+    def __init__(self, thrust_max: float, set_mode: str):
+        self.thrust_max = thrust_max
+        self.m = 1  # mass
+        self.arm_l = 0.17
+        self.CT = 1
+        self.CM = 0.016
+        self.Gz = -9.8
+
+        self.thrust_max = thrust_max
+        super().__init__(
+            loss_type="brt_hjivi",
+            set_mode=set_mode,
+            state_dim=13,
+            input_dim=14,
+            control_dim=4,
+            disturbance_dim=0,
+            state_mean=[0 for i in range(13)],
+            state_var=[1.5, 1.5, 1.5, 1, 1, 1, 1, 10, 10, 10, 10, 10, 10],
+            value_mean= 0, #(math.sqrt(1.5**2 + 1.5**2 + 1.5**2) - 2 * self.collisionR) / 2,
+            value_var= 1, #math.sqrt(1.5**2 + 1.5**2 + 1.5**2),
+            value_normto=0.02,
+            deepreach_model="exact",
+        )
+
+    def state_test_range(self):
+        return [
+            [-1.5, 1.5],
+            [-1.5, 1.5],
+            [-1.5, 1.5],
+            [-1, 1],
+            [-1, 1],
+            [-1, 1],
+            [-1, 1],
+            [-10, 10],
+            [-10, 10],
+            [-10, 10],
+            [-10, 10],
+            [-10, 10],
+            [-10, 10],
+        ]
+
+    def equivalent_wrapped_state(self, state):
+        wrapped_state = torch.clone(state)
+        return wrapped_state
+
+    # Dubins3D dynamics
+    # \dot x    = v \cos \theta
+    # \dot y    = v \sin \theta
+    # \dot \theta = u
+    def dsdt(self, state, control, disturbance):
+        qw = state[..., 3] * 1.0
+        qx = state[..., 4] * 1.0
+        qy = state[..., 5] * 1.0
+        qz = state[..., 6] * 1.0
+        vx = state[..., 7] * 1.0
+        vy = state[..., 8] * 1.0
+        vz = state[..., 9] * 1.0
+        wx = state[..., 10] * 1.0
+        wy = state[..., 11] * 1.0
+        wz = state[..., 12] * 1.0
+        u1 = control[..., 0] * 1.0
+        u2 = control[..., 1] * 1.0
+        u3 = control[..., 2] * 1.0
+        u4 = control[..., 3] * 1.0
+
+        dsdt = torch.zeros_like(state)
+        dsdt[..., 0] = vx
+        dsdt[..., 1] = vy
+        dsdt[..., 2] = vz
+        dsdt[..., 3] = -(wx * qx + wy * qy + wz * qz) / 2.0
+        dsdt[..., 4] = (wx * qw + wz * qy - wy * qz) / 2.0
+        dsdt[..., 5] = (wy * qw - wz * qx + wx * qz) / 2.0
+        dsdt[..., 6] = (wz * qw + wy * qx - wx * qy) / 2.0
+        dsdt[..., 7] = 2 * (qw * qy + qx * qz) * self.CT / self.m * (u1 + u2 + u3 + u4)
+        dsdt[..., 8] = 2 * (-qw * qx + qy * qz) * self.CT / self.m * (u1 + u2 + u3 + u4)
+        dsdt[..., 9] = self.Gz + (
+            1 - 2 * torch.pow(qx, 2) - 2 * torch.pow(qy, 2)
+        ) * self.CT / self.m * (u1 + u2 + u3 + u4)
+        dsdt[..., 10] = (
+            4 * math.sqrt(2) * self.CT * (u1 - u2 - u3 + u4) / (3 * self.arm_l * self.m)
+            - 5 * wy * wz / 9.0
+        )
+        dsdt[..., 11] = (
+            4
+            * math.sqrt(2)
+            * self.CT
+            * (-u1 - u2 + u3 + u4)
+            / (3 * self.arm_l * self.m)
+            + 5 * wx * wz / 9.0
+        )
+        dsdt[..., 12] = (
+            12 * self.CT * self.CM / (7 * self.arm_l**2 * self.m) * (u1 - u2 + u3 - u4)
+        )
+        return dsdt
+
+    def boundary_fn(self, state):
+        u_x = state[..., 0] - 10*0.05
+        l_x = -0.05 - state[..., 0]
+        u_y = state[..., 1] - 10*0.05
+        l_y = - 0.05 - state[..., 1]
+        u_z = state[..., 9] - 0.05
+        l_z = - 0.05 - state[..., 9]
+        # u_theta = state[..., 2] - upper_theta
+        # l_theta = lower_theta - state[..., 2]
+        u_qx = state[...,4] - 0.05
+        l_qx = -0.05 - state[...,4]
+        u_qy = state[...,5] - 0.05
+        l_qy = -0.05 - state[...,5]
+        u_wx = state[..., 10] - 0.05
+        l_wx = -0.05 - state[..., 10]
+        u_wy = state[..., 11] - 0.05
+        l_wy = -0.05 - state[..., 11]
+
+        return torch.max(torch.stack([u_x, l_x, u_y, l_y,u_z,l_z,u_qx,l_qx,u_qy,l_qy,u_wx,l_wx,u_wy,l_wy],dim=0),dim=0).values
+
+    def sample_target_state(self, num_samples):
+        raise NotImplementedError
+
+    def cost_fn(self, state_traj):
+        return torch.min(self.boundary_fn(state_traj), dim=-1).values
+
+    def hamiltonian(self, state, dvds):
+        if self.set_mode == "reach":
+            qw = state[..., 3] * 1.0
+            qx = state[..., 4] * 1.0
+            qy = state[..., 5] * 1.0
+            qz = state[..., 6] * 1.0
+            vx = state[..., 7] * 1.0
+            vy = state[..., 8] * 1.0
+            vz = state[..., 9] * 1.0
+            wx = state[..., 10] * 1.0
+            wy = state[..., 11] * 1.0
+            wz = state[..., 12] * 1.0
+
+            C1 = 2 * (qw * qy + qx * qz) * self.CT / self.m
+            C2 = 2 * (-qw * qx + qy * qz) * self.CT / self.m
+            C3 = (1 - 2 * torch.pow(qx, 2) - 2 * torch.pow(qy, 2)) * self.CT / self.m
+            C4 = 4 * math.sqrt(2) * self.CT / (3 * self.arm_l * self.m)
+            C5 = 4 * math.sqrt(2) * self.CT / (3 * self.arm_l * self.m)
+            C6 = 12 * self.CT * self.CM / (7 * self.arm_l**2 * self.m)
+
+            # Compute the hamiltonian for the quadrotor
+            ham = dvds[..., 0] * vx + dvds[..., 1] * vy + dvds[..., 2] * vz
+            ham += -dvds[..., 3] * (wx * qx + wy * qy + wz * qz) / 2.0
+            ham += dvds[..., 4] * (wx * qw + wz * qy - wy * qz) / 2.0
+            ham += dvds[..., 5] * (wy * qw - wz * qx + wx * qz) / 2.0
+            ham += dvds[..., 6] * (wz * qw + wy * qx - wx * qy) / 2.0
+            ham += dvds[..., 9] * -9.8
+            ham += (
+                -dvds[..., 10] * 5 * wy * wz / 9.0 + dvds[..., 11] * 5 * wx * wz / 9.0
+            )
+
+            ham += (
+                torch.abs(
+                    dvds[..., 7] * C1
+                    + dvds[..., 8] * C2
+                    + dvds[..., 9] * C3
+                    + dvds[..., 10] * C4
+                    - dvds[..., 11] * C5
+                    + dvds[..., 12] * C6
+                )
+                * (-self.thrust_max)
+            )
+
+            ham += (
+                torch.abs(
+                    dvds[..., 7] * C1
+                    + dvds[..., 8] * C2
+                    + dvds[..., 9] * C3
+                    - dvds[..., 10] * C4
+                    - dvds[..., 11] * C5
+                    - dvds[..., 12] * C6
+                )
+                * (-self.thrust_max)
+            )
+
+            ham += (
+                torch.abs(
+                    dvds[..., 7] * C1
+                    + dvds[..., 8] * C2
+                    + dvds[..., 9] * C3
+                    - dvds[..., 10] * C4
+                    + dvds[..., 11] * C5
+                    + dvds[..., 12] * C6
+                )
+                * (-self.thrust_max)
+            )
+
+            ham += (
+                torch.abs(
+                    dvds[..., 7] * C1
+                    + dvds[..., 8] * C2
+                    + dvds[..., 9] * C3
+                    + dvds[..., 10] * C4
+                    + dvds[..., 11] * C5
+                    - dvds[..., 12] * C6
+                )
+                * (-self.thrust_max)
+            )
+
+            return ham
+        
+        elif self.set_mode == "avoid":
+            raise NotImplementedError
+            
+
+    def optimal_control(self, state, dvds):
+        if self.set_mode == "avoid":
+            raise NotImplementedError
+        elif self.set_mode == "reach":
+            qw = state[..., 3] * 1.0
+            qx = state[..., 4] * 1.0
+            qy = state[..., 5] * 1.0
+            qz = state[..., 6] * 1.0
+
+            C1 = 2 * (qw * qy + qx * qz) * self.CT / self.m
+            C2 = 2 * (-qw * qx + qy * qz) * self.CT / self.m
+            C3 = (1 - 2 * torch.pow(qx, 2) - 2 * torch.pow(qy, 2)) * self.CT / self.m
+            C4 = 4 * math.sqrt(2) * self.CT / (3 * self.arm_l * self.m)
+            C5 = 4 * math.sqrt(2) * self.CT / (3 * self.arm_l * self.m)
+            C6 = 12 * self.CT * self.CM / (7 * self.arm_l**2 * self.m)
+
+            u1 = -self.thrust_max * torch.sign(
+                dvds[..., 7] * C1
+                + dvds[..., 8] * C2
+                + dvds[..., 9] * C3
+                + dvds[..., 10] * C4
+                - dvds[..., 11] * C5
+                + dvds[..., 12] * C6
+            )
+            u2 = -self.thrust_max * torch.sign(
+                dvds[..., 7] * C1
+                + dvds[..., 8] * C2
+                + dvds[..., 9] * C3
+                - dvds[..., 10] * C4
+                - dvds[..., 11] * C5
+                - dvds[..., 12] * C6
+            )
+            u3 = -self.thrust_max * torch.sign(
+                dvds[..., 7] * C1
+                + dvds[..., 8] * C2
+                + dvds[..., 9] * C3
+                - dvds[..., 10] * C4
+                + dvds[..., 11] * C5
+                + dvds[..., 12] * C6
+            )
+            u4 = -self.thrust_max * torch.sign(
+                dvds[..., 7] * C1
+                + dvds[..., 8] * C2
+                + dvds[..., 9] * C3
+                + dvds[..., 10] * C4
+                + dvds[..., 11] * C5
+                - dvds[..., 12] * C6
+            )
+
+        return torch.cat(
+            (u1[..., None], u2[..., None], u3[..., None], u4[..., None]), dim=-1
+        )
+
+    def optimal_disturbance(self, state, dvds):
+        return 0
+
+    def plot_config(self):
+        return {
+            "state_slices": [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0], 
+            "state_labels": [
+                "x",
+                "y",
+                "z",
+                "qw",
+                "qx",
+                "qy",
+                "qz",
+                "vx",
+                "vy",
+                "vz",
+                "wx",
+                "wy",
+                "wz",
+            ],
+            "x_axis_idx": 0,
+            "y_axis_idx": 1,
+            "z_axis_idx": 7,
+        }
+
+
+class QuadrotorReachAvoid(Dynamics):
+    def __init__(self):  # simpler quadrotor
+        super().__init__(
+            loss_type="brat_hjivi",
+            set_mode="reach_avoid",
+            state_dim=13,
+            input_dim=14,
+            control_dim=4,
+            disturbance_dim=0,
+            state_mean=[0]*13,
+            state_var=[3.,3.,3.,1.,1.,1.,1.,5.,5.,5.,5.,5.,5.],
+            value_mean=0.0,
+            value_var=1.0,
+            value_normto=0.02,
+            deepreach_model="exact",
+        )
+
+        self.collective_thrust_max = 30
+        # self.body_rate_acc_max = body_rate_acc_max
+        self.m = 1  # mass
+        self.arm_l = 0.17
+        self.CT = 1
+        self.CM = 0.016
+        self.Gz = -9.8
+
+        self.dwx_max = 8
+        self.dwy_max = 8
+        self.dwz_max = 4
+        self.dist_dwx_max = 0
+        self.dist_dwy_max = 0
+        self.dist_dwz_max = 0
+        self.dist_f = 0
+
+        self.reach_fn_weight = 1.
+        self.avoid_fn_weight = 0.3
+        self.state_range_ = torch.tensor([
+            [-3.0, 3.0],
+            [-3.0, 3.0],
+            [-3.0, 3.0],
+            [-1.0, 1.0],
+            [-1.0, 1.0],
+            [-1.0, 1.0],
+            [-1.0, 1.0],
+            [-5.0, 5.0],
+            [-5.0, 5.0],
+            [-5.0, 5.0],
+            [-5.0, 5.0],
+            [-5.0, 5.0],
+            [-5.0, 5.0],
+            ]).cuda()
+        self.control_range_ =torch.tensor([[-self.collective_thrust_max, self.collective_thrust_max],
+                [-self.dwx_max, self.dwx_max],
+                [-self.dwy_max, self.dwy_max],
+                [-self.dwz_max, self.dwz_max]]).cuda()
+        self.eps_var=torch.tensor([20,8,8,4]).cuda()
+        self.control_init= torch.tensor([-self.Gz*0.0,0,0,0]).cuda()
+
+        state_mean_=(self.state_range_[:,0]+self.state_range_[:,1])/2.0
+        state_var_=(self.state_range_[:,1]-self.state_range_[:,0])/2.0
+
+    def state_test_range(self):
+        return self.state_range_.cpu().tolist()
+
+    def normalize_q(self, x):
+        # normalize quaternion
+        normalized_x = x*1.0
+        q_tensor = x[..., 3:7]
+        q_tensor = torch.nn.functional.normalize(
+            q_tensor, p=2,dim=-1)  # normalize quaternion
+        normalized_x[..., 3:7] = q_tensor
+        return normalized_x
+
+    # def clamp_state_input(self, state_input):
+    #     return self.normalize_q(state_input)
+
+    def control_range(self, state):
+        return [[-self.collective_thrust_max, self.collective_thrust_max],
+                [-self.dwx_max, self.dwx_max],
+                [-self.dwy_max, self.dwy_max],
+                [-self.dwz_max, self.dwz_max]]
+
+    def state_test_range(self):
+        return self.state_range_.cpu().tolist()
+
+    def state_verification_range(self):
+        return self.state_range_.cpu().tolist()
+
+    def periodic_transform_fn(self, input):
+        return input.cuda()
+
+    def equivalent_wrapped_state(self, state):
+        wrapped_state = torch.clone(state)
+        # return wrapped_state
+        return self.normalize_q(wrapped_state)
+
+    def dsdt(self, state, control, disturbance):
+        qw = state[..., 3] * 1.0
+        qx = state[..., 4] * 1.0
+        qy = state[..., 5] * 1.0
+        qz = state[..., 6] * 1.0
+        vx = state[..., 7] * 1.0
+        vy = state[..., 8] * 1.0
+        vz = state[..., 9] * 1.0
+        wx = state[..., 10] * 1.0
+        wy = state[..., 11] * 1.0
+        wz = state[..., 12] * 1.0
+        f = (control[..., 0]) * 1.0
+
+        dsdt = torch.zeros_like(state)
+        dsdt[..., 0] = vx
+        dsdt[..., 1] = vy
+        dsdt[..., 2] = vz
+        dsdt[..., 3] = -(wx * qx + wy * qy + wz * qz) / 2.0
+        dsdt[..., 4] = (wx * qw + wz * qy - wy * qz) / 2.0
+        dsdt[..., 5] = (wy * qw - wz * qx + wx * qz) / 2.0
+        dsdt[..., 6] = (wz * qw + wy * qx - wx * qy) / 2.0
+        dsdt[..., 7] = 2 * (qw * qy + qx * qz) * self.CT / \
+            self.m * f
+        dsdt[..., 8] = 2 * (-qw * qx + qy * qz) * self.CT / \
+            self.m * f
+        dsdt[..., 9] = self.Gz + (1 - 2 * torch.pow(qx, 2) - 2 *
+                                  torch.pow(qy, 2)) * self.CT / self.m * f
+        dsdt[..., 10] = (control[..., 1]
+                         ) * 1.0 - 5 * wy * wz / 9.0
+        dsdt[..., 11] = (control[..., 2]
+                         ) * 1.0 + 5 * wx * wz / 9.0
+        dsdt[..., 12] = (control[..., 3]) * 1.0
+
+        return dsdt
+    
+    def quat_to_rpy(self,quat):
+        quat = np.array(np.hstack([quat[1:],quat[0]]))
+        return ROT.from_quat(quat,scalar_first=True).as_euler("XYZ")
+    
+    def quat_to_rpy_torch(self,quat):
+        """
+        Convert quaternion to roll-pitch-yaw (RPY) Euler angles.
+        Rotation sequence: Yaw (Z) -> Pitch (Y) -> Roll (X) from world to body frame.
+        
+        Args:
+            quat: torch.Tensor of shape (..., 4) where last dim is [w, x, y, z]
+        
+        Returns:
+            torch.Tensor of shape (..., 3) containing [roll, pitch, yaw] in radians
+        """
+        # Normalize quaternion to unit length
+        quat = quat / torch.norm(quat, dim=-1, keepdim=True)
+        
+        # Extract quaternion components [w, x, y, z]
+        w, x, y, z = quat[..., 0], quat[..., 1], quat[..., 2], quat[..., 3]
+        
+        # Convert to Euler angles (ZYX convention)
+        # Roll (rotation around X-axis) - applied last
+        sinr_cosp = 2 * (w * x - y * z)
+        cosr_cosp = 1 - 2 * (x * x + y * y)
+        roll = torch.atan2(sinr_cosp, cosr_cosp)
+        
+        # Pitch (rotation around Y-axis) - applied second
+        sinp = 2 * (w * y + z * x)
+        sinp = torch.clamp(sinp, -1.0, 1.0)
+        pitch = torch.asin(sinp)
+        
+        # Yaw (rotation around Z-axis) - applied first
+        siny_cosp = 2 * (w * z - x * y)
+        cosy_cosp = 1 - 2 * (y * y + z * z)
+        yaw = torch.atan2(siny_cosp, cosy_cosp)
+        
+        return torch.stack([roll, pitch, yaw], dim=-1)
+
+    def reach_fn(self, state):
+        tol = 2e-2
+        tol_q = 0.08
+        tol_w = 0.05
+        weight_w = 100
+
+        # x = state[..., 0] * 1.0
+        # y = state[..., 1] * 1.0
+        # z = state[..., 2] * 1.0
+        qw = state[..., 3] * 1.0
+        qx = state[..., 4] * 1.0
+        qy = state[..., 5] * 1.0
+        qz = state[..., 6] * 1.0
+        vx = state[..., 7] * 1.0
+        vy = state[..., 8] * 1.0
+        vz = state[..., 9] * 1.0
+        wx = state[..., 10] * 1.0
+        wy = state[..., 11] * 1.0
+        wz = state[..., 12] * 1.0
+        
+        rpy = self.quat_to_rpy_torch(state[...,3:7])
+        pitch = rpy[...,0]
+        roll = rpy[...,1]
+
+        u_vx = vx - tol
+        l_vx = -tol - vx
+        u_vy = vy - tol
+        l_vy = -tol - vy
+        u_vz = vz - tol
+        l_vz = -tol - vz
+        u_pitch = pitch - tol_q
+        l_pitch = -tol_q - pitch
+        u_roll = roll - tol_q
+        l_roll = -tol_q - roll
+        u_wx = (wx - tol_w) *weight_w 
+        l_wx = (-tol_w - wx) * weight_w
+        u_wy = (wy - tol_w) * weight_w
+        l_wy = (-tol_w - wy) * weight_w
+
+        # l = torch.stack([u_vx, u_vy, u_vz, u_pitch, u_roll, u_wx, u_wy, l_vx, l_vy, l_vz, l_pitch, l_roll, l_wx, l_wy], dim=-1)
+        # l = torch.stack([u_vx, u_vy, u_vz, u_qx, u_qy, l_qx,l_qy, l_vx, l_vy, l_vz], dim=-1)
+        # l = torch.stack([u_vx, u_vy, u_vz, l_vx, l_vy, l_vz, u_wx,l_wx,u_wy,l_wy], dim=-1)
+        # l = torch.stack([u_pitch, l_pitch,u_roll,l_roll,u_wx,u_wy,l_wx,l_wy,u_vx,l_vx, u_vy,l_vy,u_vz,l_vz], dim=-1)
+        l = torch.stack([u_pitch, l_pitch,u_roll,l_roll,u_vx,l_vx, u_vy,l_vy, u_vz,l_vz, u_wx,l_wx, u_wy, l_wy], dim=-1)
+        
+        return torch.max(l, dim=-1)[0]
+
+    def avoid_fn(self, state):
+        device = state.device.type
+        if 'cuda' in device:
+            g_l =  state[...,0:3] - self.state_range_[0:3, 0] 
+            u_l = self.state_range_[0:3, 1] - state[...,0:3] 
+        else:
+            g_l =  state[...,0:3] - self.state_range_[0:3, 0].cpu()
+            u_l = self.state_range_[0:3, 1].cpu() - state[...,0:3] 
+        # Stack both, then find global maximum across all dimensions
+        combined = torch.stack([g_l, u_l], dim=-1)  # Shape: (batch, state_dim, 2)
+        min_g = combined.min(dim=-1).values.min(dim=-1).values  # Max over both state_dim and the 2 tensors
+
+        return min_g
+
+    def boundary_fn(self, state):
+        if self.set_mode=='avoid':
+            raise NotImplementedError
+        elif self.set_mode=='reach_avoid':
+            return torch.maximum(self.reach_fn(state), -self.avoid_fn(state))
+        elif self.set_mode=='reach':
+            return self.reach_fn(state)
+
+    def sample_target_state(self, num_samples):
+        target_state_range = self.state_test_range()
+        target_state_range[0] = [-1, 1]
+        target_state_range[1] = [-0.25, 0.25]
+        target_state_range = torch.tensor(target_state_range)
+        return target_state_range[:, 0] + torch.rand(num_samples, self.state_dim)*(target_state_range[:, 1] - target_state_range[:, 0])
+
+    def cost_fn(self, state_traj):
+        if self.set_mode=='avoid':
+            return torch.min(self.boundary_fn(state_traj), dim=-1).values
+        elif self.set_mode=='reach':
+            return torch.min(self.boundary_fn(state_traj), dim=-1).values
+        elif self.set_mode=='reach_avoid':
+            # return min_t max{l(x(t)), max_k_up_to_t{-g(x(k))}}, where l(x) is reach_fn, g(x) is avoid_fn
+            reach_values = self.reach_fn(state_traj)
+            avoid_values = self.avoid_fn(state_traj)
+            # return torch.min(torch.clamp(reach_values, min=torch.max(-avoid_values, dim=-1).values.unsqueeze(-1)),dim=-1).values
+            return torch.min(
+                torch.maximum(reach_values, torch.cummax(-avoid_values, dim=-1).values),
+                dim=-1,
+            ).values
+
+    def hamiltonian(self, state, dvds):
+        if self.set_mode in ['reach', 'reach_avoid']:
+            qw = state[..., 3] * 1.0
+            qx = state[..., 4] * 1.0
+            qy = state[..., 5] * 1.0
+            qz = state[..., 6] * 1.0
+            vx = state[..., 7] * 1.0
+            vy = state[..., 8] * 1.0
+            vz = state[..., 9] * 1.0
+            wx = state[..., 10] * 1.0
+            wy = state[..., 11] * 1.0
+            wz = state[..., 12] * 1.0
+
+            c1 = 2 * (qw * qy + qx * qz) * self.CT / self.m
+            c2 = 2 * (-qw * qx + qy * qz) * self.CT / self.m
+            c3 = (1 - 2 * torch.pow(qx, 2) - 2 *
+                  torch.pow(qy, 2)) * self.CT / self.m
+
+            # Compute the hamiltonian for the quadrotor
+            ham = dvds[..., 0] * vx + dvds[..., 1] * vy + dvds[..., 2] * vz
+            ham += -dvds[..., 3] * (wx * qx + wy * qy + wz * qz) / 2.0
+            ham += dvds[..., 4] * (wx * qw + wz * qy - wy * qz) / 2.0
+            ham += dvds[..., 5] * (wy * qw - wz * qx + wx * qz) / 2.0
+            ham += dvds[..., 6] * (wz * qw + wy * qx - wx * qy) / 2.0
+            ham += dvds[..., 9] * self.Gz
+            ham += -dvds[..., 10] * 5 * wy * wz / \
+                9.0 + dvds[..., 11] * 5 * wx * wz / 9.0
+
+            ham -= torch.abs(dvds[..., 7] * c1 + dvds[..., 8] *
+                             c2 + dvds[..., 9] * c3) * self.collective_thrust_max
+
+            ham -= torch.abs(dvds[..., 10]) * self.dwx_max + torch.abs(
+                dvds[..., 11]) * self.dwy_max + torch.abs(dvds[..., 12]) * self.dwz_max
 
         elif self.set_mode == 'avoid':
             qw = state[..., 3] * 1.0
@@ -990,186 +2433,79 @@ class Quadrotor(Dynamics):
             wy = state[..., 11] * 1.0
             wz = state[..., 12] * 1.0
 
-
-            C1=2*(qw*qy+qx*qz)*self.CT/self.m
-            C2=2*(-qw*qx+qy*qz)*self.CT/self.m
-            C3=(1-2*torch.pow(qx,2)-2*torch.pow(qy,2))*self.CT/self.m
-            C4=4*math.sqrt(2)*self.CT/(3*self.arm_l*self.m)
-            C5=4*math.sqrt(2)*self.CT/(3*self.arm_l*self.m)
-            C6=12*self.CT*self.CM/(7*self.arm_l**2*self.m)
+            c1 = 2 * (qw * qy + qx * qz) * self.CT / self.m
+            c2 = 2 * (-qw * qx + qy * qz) * self.CT / self.m
+            c3 = (1 - 2 * torch.pow(qx, 2) - 2 *
+                  torch.pow(qy, 2)) * self.CT / self.m
 
             # Compute the hamiltonian for the quadrotor
-            ham= dvds[..., 0]*vx + dvds[..., 1]*vy+ dvds[..., 2]*vz
-            ham+= -dvds[..., 3]* (wx*qx+wy*qy+wz*qz)/2.0 
-            ham+= dvds[..., 4]*(wx*qw+wz*qy-wy*qz)/2.0
-            ham+= dvds[..., 5]*(wy*qw-wz*qx+wx*qz)/2.0
-            ham+= dvds[..., 6]*(wz*qw+wy*qx-wx*qy)/2.0
-            ham+= dvds[..., 9]*-9.8
-            ham+= -dvds[..., 10]*5*wy*wz/9.0+ dvds[..., 11]*5*wx*wz/9.0
+            ham = dvds[..., 0] * vx + dvds[..., 1] * vy + dvds[..., 2] * vz
+            ham += -dvds[..., 3] * (wx * qx + wy * qy + wz * qz) / 2.0
+            ham += dvds[..., 4] * (wx * qw + wz * qy - wy * qz) / 2.0
+            ham += dvds[..., 5] * (wy * qw - wz * qx + wx * qz) / 2.0
+            ham += dvds[..., 6] * (wz * qw + wy * qx - wx * qy) / 2.0
+            ham += dvds[..., 9] * self.Gz
+            ham += -dvds[..., 10] * 5 * wy * wz / \
+                9.0 + dvds[..., 11] * 5 * wx * wz / 9.0
 
-            ham+=torch.abs(dvds[..., 7]*C1+dvds[..., 8]*C2+dvds[..., 9]*C3
-                +dvds[..., 10]*C4-dvds[..., 11]*C5+dvds[..., 12]*C6)*self.thrust_max
+            ham += torch.abs(dvds[..., 7] * c1 + dvds[..., 8] *
+                             c2 + dvds[..., 9] * c3) * self.collective_thrust_max
 
-            ham+=torch.abs(dvds[..., 7]*C1+dvds[..., 8]*C2+dvds[..., 9]*C3
-                -dvds[..., 10]*C4-dvds[..., 11]*C5-dvds[..., 12]*C6)*self.thrust_max
+            ham += torch.abs(dvds[..., 10]) * self.dwx_max + torch.abs(
+                dvds[..., 11]) * self.dwy_max + torch.abs(dvds[..., 12]) * self.dwz_max
 
-            ham+=torch.abs(dvds[..., 7]*C1+dvds[..., 8]*C2+dvds[..., 9]*C3
-                -dvds[..., 10]*C4+dvds[..., 11]*C5+dvds[..., 12]*C6)*self.thrust_max
+        else:
+            raise NotImplementedError
 
-            ham+=torch.abs(dvds[..., 7]*C1+dvds[..., 8]*C2+dvds[..., 9]*C3
-                +dvds[..., 10]*C4+dvds[..., 11]*C5-dvds[..., 12]*C6)*self.thrust_max
-
-            return ham
+        return ham
 
     def optimal_control(self, state, dvds):
-        if self.set_mode == 'reach':
-            raise NotImplementedError
+        if self.set_mode in ['reach', 'reach_avoid']:
+            qw = state[..., 3] * 1.0
+            qx = state[..., 4] * 1.0
+            qy = state[..., 5] * 1.0
+            qz = state[..., 6] * 1.0
+
+            c1 = 2 * (qw * qy + qx * qz) * self.CT / self.m
+            c2 = 2 * (-qw * qx + qy * qz) * self.CT / self.m
+            c3 = (1 - 2 * torch.pow(qx, 2) - 2 *
+                  torch.pow(qy, 2)) * self.CT / self.m
+
+            u1 = -self.collective_thrust_max * \
+                torch.sign(dvds[..., 7] * c1 + dvds[..., 8] *
+                           c2 + dvds[..., 9] * c3)
+            u2 = -self.dwx_max * torch.sign(dvds[..., 10])
+            u3 = -self.dwy_max * torch.sign(dvds[..., 11])
+            u4 = -self.dwz_max * torch.sign(dvds[..., 12])
         elif self.set_mode == 'avoid':
             qw = state[..., 3] * 1.0
             qx = state[..., 4] * 1.0
             qy = state[..., 5] * 1.0
             qz = state[..., 6] * 1.0
 
+            c1 = 2 * (qw * qy + qx * qz) * self.CT / self.m
+            c2 = 2 * (-qw * qx + qy * qz) * self.CT / self.m
+            c3 = (1 - 2 * torch.pow(qx, 2) - 2 *
+                  torch.pow(qy, 2)) * self.CT / self.m
 
-            C1=2*(qw*qy+qx*qz)*self.CT/self.m
-            C2=2*(-qw*qx+qy*qz)*self.CT/self.m
-            C3=(1-2*torch.pow(qx,2)-2*torch.pow(qy,2))*self.CT/self.m
-            C4=4*math.sqrt(2)*self.CT/(3*self.arm_l*self.m)
-            C5=4*math.sqrt(2)*self.CT/(3*self.arm_l*self.m)
-            C6=12*self.CT*self.CM/(7*self.arm_l**2*self.m)
-
-
-            u1=self.thrust_max*torch.sign(dvds[..., 7]*C1+dvds[..., 8]*C2+dvds[..., 9]*C3
-                +dvds[..., 10]*C4-dvds[..., 11]*C5+dvds[..., 12]*C6)
-            u2=self.thrust_max*torch.sign(dvds[..., 7]*C1+dvds[..., 8]*C2+dvds[..., 9]*C3
-                -dvds[..., 10]*C4-dvds[..., 11]*C5-dvds[..., 12]*C6)
-            u3=self.thrust_max*torch.sign(dvds[..., 7]*C1+dvds[..., 8]*C2+dvds[..., 9]*C3
-                -dvds[..., 10]*C4+dvds[..., 11]*C5+dvds[..., 12]*C6)
-            u4=self.thrust_max*torch.sign(dvds[..., 7]*C1+dvds[..., 8]*C2+dvds[..., 9]*C3
-                +dvds[..., 10]*C4+dvds[..., 11]*C5-dvds[..., 12]*C6)
+            u1 = self.collective_thrust_max * \
+                torch.sign(dvds[..., 7] * c1 + dvds[..., 8] *
+                           c2 + dvds[..., 9] * c3)
+            u2 = self.dwx_max * torch.sign(dvds[..., 10])
+            u3 = self.dwy_max * torch.sign(dvds[..., 11])
+            u4 = self.dwz_max * torch.sign(dvds[..., 12])
 
         return torch.cat((u1[..., None], u2[..., None], u3[..., None], u4[..., None]), dim=-1)
 
     def optimal_disturbance(self, state, dvds):
-        return 0
+        return torch.zeros(1)
+
 
     def plot_config(self):
         return {
-            'state_slices': [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            'state_slices': [0,0,0,1,0,0,0,0,0,0,0,0,0],
             'state_labels': ['x', 'y', 'z', 'qw', 'qx', 'qy', 'qz', 'vx', 'vy', 'vz', 'wx', 'wy', 'wz'],
-            'x_axis_idx': 0,
-            'y_axis_idx': 2,
-            'z_axis_idx': 7,
-        }
-
-class MultiVehicleCollision(Dynamics):
-    def __init__(self):
-        self.angle_alpha_factor = 1.2
-        self.velocity = 0.6
-        self.omega_max = 1.1
-        self.collisionR = 0.25
-        super().__init__(
-            loss_type='brt_hjivi', set_mode='avoid',
-            state_dim=9, input_dim=10, control_dim=3, disturbance_dim=0,
-            state_mean=[
-                0, 0,
-                0, 0, 
-                0, 0,
-                0, 0, 0,
-            ],
-            state_var=[
-                1, 1,
-                1, 1,
-                1, 1,
-                self.angle_alpha_factor*math.pi, self.angle_alpha_factor*math.pi, self.angle_alpha_factor*math.pi,
-            ],
-            value_mean=0.25,
-            value_var=0.5,
-            value_normto=0.02,
-            deepreach_model="exact"
-        )
-
-    def state_test_range(self):
-        return [
-            [-1, 1], [-1, 1],
-            [-1, 1], [-1, 1],
-            [-1, 1], [-1, 1],
-            [-math.pi, math.pi], [-math.pi, math.pi], [-math.pi, math.pi],           
-        ]
-
-    def equivalent_wrapped_state(self, state):
-        wrapped_state = torch.clone(state)
-        wrapped_state[..., 6] = (wrapped_state[..., 6] + math.pi) % (2*math.pi) - math.pi
-        wrapped_state[..., 7] = (wrapped_state[..., 7] + math.pi) % (2*math.pi) - math.pi
-        wrapped_state[..., 8] = (wrapped_state[..., 8] + math.pi) % (2*math.pi) - math.pi
-        return wrapped_state
-        
-    # dynamics (per car)
-    # \dot x    = v \cos \theta
-    # \dot y    = v \sin \theta
-    # \dot \theta = u
-    def dsdt(self, state, control, disturbance):
-        dsdt = torch.zeros_like(state)
-        dsdt[..., 0] = self.velocity*torch.cos(state[..., 6])
-        dsdt[..., 1] = self.velocity*torch.sin(state[..., 6])
-        dsdt[..., 2] = self.velocity*torch.cos(state[..., 7])
-        dsdt[..., 3] = self.velocity*torch.sin(state[..., 7])
-        dsdt[..., 4] = self.velocity*torch.cos(state[..., 8])
-        dsdt[..., 5] = self.velocity*torch.sin(state[..., 8])
-        dsdt[..., 6] = control[..., 0]
-        dsdt[..., 7] = control[..., 1]
-        dsdt[..., 8] = control[..., 2]
-        return dsdt
-    
-    def boundary_fn(self, state):
-        boundary_values = torch.norm(state[..., 0:2] - state[..., 2:4], dim=-1) - self.collisionR
-        for i in range(1, 2):
-            boundary_values_current = torch.norm(state[..., 0:2] - state[..., 2*(i+1):2*(i+1)+2], dim=-1) - self.collisionR
-            boundary_values = torch.min(boundary_values, boundary_values_current)
-        # Collision cost between the evaders themselves
-        for i in range(2):
-            for j in range(i+1, 2):
-                evader1_coords_index = (i+1)*2
-                evader2_coords_index = (j+1)*2
-                boundary_values_current = torch.norm(state[..., evader1_coords_index:evader1_coords_index+2] - state[..., evader2_coords_index:evader2_coords_index+2], dim=-1) - self.collisionR
-                boundary_values = torch.min(boundary_values, boundary_values_current)
-        return boundary_values
-
-    def sample_target_state(self, num_samples):
-        raise NotImplementedError
-    
-    def cost_fn(self, state_traj):
-        return torch.min(self.boundary_fn(state_traj), dim=-1).values
-    
-    def hamiltonian(self, state, dvds):
-        # Compute the hamiltonian for the ego vehicle
-        ham = self.velocity*(torch.cos(state[..., 6]) * dvds[..., 0] + torch.sin(state[..., 6]) * dvds[..., 1]) + self.omega_max * torch.abs(dvds[..., 6])
-        # Hamiltonian effect due to other vehicles
-        ham += self.velocity*(torch.cos(state[..., 7]) * dvds[..., 2] + torch.sin(state[..., 7]) * dvds[..., 3]) + self.omega_max * torch.abs(dvds[..., 7])
-        ham += self.velocity*(torch.cos(state[..., 8]) * dvds[..., 4] + torch.sin(state[..., 8]) * dvds[..., 5]) + self.omega_max * torch.abs(dvds[..., 8])
-        return ham
-
-    def optimal_control(self, state, dvds):
-        return self.omega_max*torch.sign(dvds[..., [6, 7, 8]])
-
-    def optimal_disturbance(self, state, dvds):
-        return 0
-    
-    def plot_config(self):
-        return {
-            'state_slices': [
-                0, 0, 
-                -0.4, 0, 
-                0.4, 0,
-                math.pi/2, math.pi/4, 3*math.pi/4,
-            ],
-            'state_labels': [
-                r'$x_1$', r'$y_1$',
-                r'$x_2$', r'$y_2$',
-                r'$x_3$', r'$y_3$',
-                r'$\theta_1$', r'$\theta_2$', r'$\theta_3$',
-            ],
-            'x_axis_idx': 0,
-            'y_axis_idx': 1,
-            'z_axis_idx': 6,
+            'x_axis_idx': 7,
+            'y_axis_idx': 8,
+            'z_axis_idx': 0,
         }

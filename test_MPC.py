@@ -1,9 +1,9 @@
+from utils import MPC
 import wandb
 import configargparse
 import inspect
 import os
 import torch
-torch.set_default_dtype(torch.float64)
 import shutil
 import random
 import numpy as np
@@ -235,131 +235,89 @@ if (mode == 'all') or (mode == 'test'):
 
 opt = p.parse_args()
 
-# start wandb
-if use_wandb:
-    wandb.init(
-        project=opt.wandb_project,
-        entity=opt.wandb_entity,
-        group=opt.wandb_group,
-        name=opt.wandb_name,
-    )
-    wandb.config.update(opt)
-
-experiment_dir = os.path.join(opt.experiments_dir, opt.experiment_name)
-if (mode == 'train') and (opt.resume_checkpoint > 0):
-    experiment_dir = experiment_dir+"_cond"
-if (mode == 'all') or (mode == 'train'):
-    # create experiment dir
-    if os.path.exists(experiment_dir):
-        shutil.rmtree(experiment_dir)
-    os.makedirs(experiment_dir)
-elif mode == 'test':
-    # confirm that experiment dir already exists
-    if not os.path.exists(experiment_dir):
-        raise RuntimeError(
-            'Cannot run test mode: experiment directory not found!')
-
-current_time = datetime.now()
-# log current config
-with open(os.path.join(experiment_dir, 'config_%s.txt' % current_time.strftime('%m_%d_%Y_%H_%M')), 'w') as f:
-    for arg, val in vars(opt).items():
-        f.write(arg + ' = ' + str(val) + '\n')
-
-if (mode == 'all') or (mode == 'train'):
-    # set counter_end appropriately if needed
-    if opt.counter_end == -1:
-        opt.counter_end = opt.num_epochs
-
-    # log original options
-    with open(os.path.join(experiment_dir, 'orig_opt.pickle'), 'wb') as opt_file:
-        pickle.dump(opt, opt_file)
-
-# load original experiment settings
-with open(os.path.join(experiment_dir, 'orig_opt.pickle'), 'rb') as opt_file:
-    orig_opt = pickle.load(opt_file)
-
 # set the experiment seed
-# torch.manual_seed(orig_opt.seed)
+# torch.manual_seed(opt.seed)
 torch.manual_seed(12)
-random.seed(orig_opt.seed)
-np.random.seed(orig_opt.seed)
+random.seed(opt.seed)
+np.random.seed(opt.seed)
 
-dynamics_class = getattr(dynamics, orig_opt.dynamics_class)
-dynamics = dynamics_class(**{argname: getattr(orig_opt, argname)
+dynamics_class = getattr(dynamics, opt.dynamics_class)
+dynamics = dynamics_class(**{argname: getattr(opt, argname)
                           for argname in inspect.signature(dynamics_class).parameters.keys() if argname != 'self'})
 if (mode == 'train') and (opt.resume_checkpoint > 0):
-    orig_opt.counter_start = opt.resume_checkpoint
-    orig_opt.pretrain = False
-    orig_opt.counter_end -= opt.resume_checkpoint
-    orig_opt.num_epochs -= opt.resume_checkpoint
+    opt.counter_start = opt.resume_checkpoint
+    opt.pretrain = False
+    opt.counter_end -= opt.resume_checkpoint
+    opt.num_epochs -= opt.resume_checkpoint
 
-dynamics.set_model(orig_opt.deepReach_model)
+dynamics.set_model(opt.deepReach_model)
 if mode=='test': 
-    orig_opt.not_use_MPC=True
-    orig_opt.no_time_curr=True
+    opt.not_use_MPC=True
+    opt.no_time_curr=True
 
-
-
-# # use single model
-model = modules.SingleBVPNet(in_features=dynamics.input_dim, out_features=1, type=orig_opt.model, mode=orig_opt.model_mode,
-                             final_layer_factor=1., hidden_features=orig_opt.num_nl, num_hidden_layers=orig_opt.num_hl, 
-                             periodic_transform_fn=dynamics.periodic_transform_fn)
-model.cuda()
-policy=None
-if orig_opt.pretrained_model != "none":
-    model.load_state_dict(torch.load(
-        "./runs/%s/training/checkpoints/model_final.pth" % orig_opt.pretrained_model)["model"])
-
-    if orig_opt.finetune:
-        for param in model.parameters():
-            param.requires_grad = False
-        for name, param in model.named_parameters():
-            if name == 'net.net.4.0.weight' or name == 'net.net.4.0.bias':
-                param.requires_grad = True
-            print(name, param.requires_grad)
-    policy=model
 
 dataset = dataio.ReachabilityDataset(
-    dynamics=dynamics, numpoints=orig_opt.numpoints,
-    pretrain=orig_opt.pretrain, pretrain_iters=orig_opt.pretrain_iters,
-    tMin=orig_opt.tMin, tMax=orig_opt.tMax,
-    counter_start=orig_opt.counter_start, counter_end=orig_opt.counter_end,
-    num_src_samples=orig_opt.num_src_samples, num_target_samples=orig_opt.num_target_samples,
-    use_MPC = (not orig_opt.not_use_MPC), time_curr=(not orig_opt.no_time_curr),
-    MPC_data_path = orig_opt.MPC_data_path, num_MPC_perturbation_samples = orig_opt.num_MPC_perturbation_samples, MPC_dt = orig_opt.MPC_dt,
-    MPC_mode = orig_opt.MPC_mode, MPC_sample_mode = orig_opt.MPC_sample_mode, MPC_style= orig_opt.MPC_style, 
-    MPC_lambda_ = orig_opt.MPC_lambda_, MPC_batch_size = orig_opt.MPC_batch_size, MPC_receding_horizon= orig_opt.MPC_receding_horizon, 
-    num_MPC_data_samples = orig_opt.num_MPC_data_samples, num_iterative_refinement=orig_opt.num_iterative_refinement,
-    time_till_refinement=orig_opt.time_till_refinement,num_MPC_batches=orig_opt.num_MPC_batches, 
-    aug_with_MPC_data= orig_opt.aug_with_MPC_data, policy=policy, refine_dataset=(not orig_opt.not_refine_dataset))
+    dynamics=dynamics, numpoints=opt.numpoints,
+    pretrain=opt.pretrain, pretrain_iters=opt.pretrain_iters,
+    tMin=opt.tMin, tMax=opt.tMax,
+    counter_start=opt.counter_start, counter_end=opt.counter_end,
+    num_src_samples=opt.num_src_samples, num_target_samples=opt.num_target_samples,
+    use_MPC = (not opt.not_use_MPC), time_curr=(not opt.no_time_curr),
+    MPC_data_path = opt.MPC_data_path, num_MPC_perturbation_samples = opt.num_MPC_perturbation_samples, MPC_dt = opt.MPC_dt,
+    MPC_mode = opt.MPC_mode, MPC_sample_mode = opt.MPC_sample_mode, MPC_style= opt.MPC_style, 
+    MPC_lambda_ = opt.MPC_lambda_, MPC_batch_size = opt.MPC_batch_size, MPC_receding_horizon= opt.MPC_receding_horizon, 
+    num_MPC_data_samples = opt.num_MPC_data_samples, num_iterative_refinement=opt.num_iterative_refinement,
+    time_till_refinement=opt.time_till_refinement,num_MPC_batches=opt.num_MPC_batches, 
+    aug_with_MPC_data= opt.aug_with_MPC_data, policy=None, refine_dataset=(not opt.not_refine_dataset))
+# mpc_module = MPC.MPC(horizon=None, receding_horizon=opt.MPC_receding_horizon, dT=opt.MPC_dt, num_samples=opt.num_MPC_perturbation_samples,
+#                            dynamics_=opt.dynamics, device='cuda', mode=opt.MPC_mode,
+#                            sample_mode=opt.MPC_sample_mode, lambda_=opt.MPC_lambda_, style=opt.MPC_style, num_iterative_refinement=opt.num_iterative_refinement)
 
-experiment_class = getattr(experiments, orig_opt.experiment_class)
-experiment = experiment_class(
-    model=model, dataset=dataset, experiment_dir=experiment_dir, use_wandb=use_wandb)
-experiment.init_special(**{argname: getattr(orig_opt, argname) for argname in inspect.signature(
-    experiment_class.init_special).parameters.keys() if argname != 'self'})
+init_states = dataset.sample_init_state()
+costs, MPC_traj = dataset.get_MPC_traj(opt.tMax,0)
 
-if (mode == 'all') or (mode == 'train'):
-    if dynamics.loss_type == 'brt_hjivi':
-        loss_fn = losses.init_brt_hjivi_loss(
-            dynamics, orig_opt.minWith, orig_opt.dirichlet_loss_divisor, orig_opt.MPC_loss_type, (not orig_opt.not_use_MPC), MPC_finetune_lambda = orig_opt.MPC_finetune_lambda)
-    elif dynamics.loss_type == 'brat_hjivi':
-        loss_fn = losses.init_brat_hjivi_loss(
-            dynamics, orig_opt.minWith, orig_opt.dirichlet_loss_divisor, orig_opt.MPC_loss_type, (not orig_opt.not_use_MPC), MPC_finetune_lambda = orig_opt.MPC_finetune_lambda)
-    else:
-        raise NotImplementedError
-    experiment.train(
-        batch_size=orig_opt.batch_size, epochs=orig_opt.num_epochs, lr=orig_opt.lr, 
-        steps_til_summary=orig_opt.steps_til_summary, epochs_til_checkpoint=orig_opt.epochs_til_ckpt,
-        loss_fn=loss_fn, clip_grad=orig_opt.clip_grad, use_lbfgs=orig_opt.use_lbfgs, adjust_relative_grads=orig_opt.adj_rel_grads,
-        val_x_resolution=orig_opt.val_x_resolution, val_y_resolution=orig_opt.val_y_resolution, val_z_resolution=orig_opt.val_z_resolution, val_time_resolution=orig_opt.val_time_resolution,
-        MPC_importance_init=orig_opt.MPC_importance_init, MPC_importance_final=orig_opt.MPC_importance_final, MPC_decay_scheme=orig_opt.MPC_decay_scheme)
+print(f'Shape of MPC traj {MPC_traj.shape}')
+print(f'RPY: {dataset.dynamics.quat_to_rpy_torch(MPC_traj)}')
 
-if (mode == 'all') or (mode == 'test'):
-    experiment.test(
-        current_time=current_time,
-        last_checkpoint=orig_opt.num_epochs, checkpoint_dt=orig_opt.epochs_til_ckpt,
-        checkpoint_toload=opt.checkpoint_toload, dt=opt.dt,
-        num_scenarios=opt.num_scenarios, num_violations=opt.num_violations,
-        set_type='BRT' if orig_opt.minWith in ['zero', 'target'] else 'BRS', control_type=opt.control_type, 
-        data_step=opt.data_step, gt_data_path=opt.gt_data_path)
+avoid_costs = dataset.dynamics.avoid_fn(MPC_traj)
+reach_costs = dataset.dynamics.reach_fn(MPC_traj)
+
+print(f'trajectory 0 : avoid_costs = {-avoid_costs[0]}')
+print(f'trajectory 0 : reach_costs = {reach_costs[0]}')
+
+
+MPC_traj = MPC_traj.cpu().numpy()
+costs = costs.cpu().numpy()
+
+
+index_to_plot = np.argsort(costs)[:100]
+
+print(f'Minimum costs {costs[index_to_plot]}')
+
+import matplotlib.pyplot as plt
+labels = ['x','y','z','qw','qx','qy','qz','vx','vy','vz','wx','wy','wz']
+# labels = ['x','y','theta','vx','vy','w']
+for i in range(5):
+    num_states = dynamics.state_dim
+    fig, axes = plt.subplots(int(num_states/3) + num_states % 3, 3, figsize=(16, 12))
+    fig.suptitle(f'', fontsize=16, fontweight='bold')
+
+    # Flatten axes for easier indexing
+    axes = axes.flatten()
+
+    # Plot each state in its own subplot
+    for state_idx in range(num_states):
+        axes[state_idx].plot(np.arange(0,MPC_traj.shape[1])*opt.MPC_dt,MPC_traj[index_to_plot[i], :, state_idx], 
+                            color=f'C{state_idx}', linewidth=2)
+        axes[state_idx].set_title(f'State {labels[state_idx]}', fontsize=10)
+        axes[state_idx].grid(True, alpha=0.3)
+        axes[state_idx].set_xlabel('Time', fontsize=8)
+        axes[state_idx].set_ylabel(f'{labels[state_idx]}', fontsize=8)
+
+    # # Hide unused subplots
+    # for idx in range(num_states, len(axes)):
+    #     axes[idx].axis('off')
+
+    plt.tight_layout()
+    plt.show()
+    # plt.close()

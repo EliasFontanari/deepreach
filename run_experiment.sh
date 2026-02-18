@@ -38,7 +38,7 @@ python run_experiment.py --mode train --experiment_name Dubins_avoid --dynamics_
 
 ############################################## Quadrotor ##########################################
 # To train (exp time: 3h on RTX 4090)
-python run_experiment.py --mode train --experiment_name Quadrotor --use_wandb --wandb_entity YOUR_WANDB_NAME --wandb_project MPC --wandb_name Quadrotor --wandb_group Quadrotor --dynamics_class Quadrotor --tMax 1 --pretrain --pretrain_iters 1000 --num_epochs 104000 --counter_end 100000 --num_nl 512 --collisionR 0.5 --collective_thrust_max 20 --set_mode avoid --lr 2e-5 --num_MPC_batches 20 
+python run_experiment.py --mode train --experiment_name Quadrotor --dynamics_class Quadrotor --tMax 1 --pretrain --pretrain_iters 1000 --num_epochs 104000 --counter_end 100000 --num_nl 512 --collisionR 0.5 --collective_thrust_max 20 --set_mode avoid --lr 2e-5 --num_MPC_batches 20 
 
 ############################################## F1 ##########################################
 # To train (exp time: 5h on RTX 4090)
@@ -52,3 +52,7 @@ python run_experiment.py --mode train --experiment_name LessLinear40D --use_wand
 python run_experiment.py --mode test --experiment_name LessLinear40D --checkpoint_toload -1 --data_step run_basic_recovery
 # To plot validation. Plot available under ./runs/VD/basic_BRTs.png
 python run_experiment.py --mode test --experiment_name LessLinear40D --checkpoint_toload -1 --data_step plot_ND
+
+
+
+#--use_wandb --wandb_entity YOUR_WANDB_NAME --wandb_project MPC --wandb_name Quadrotor --wandb_group Quadrotor 

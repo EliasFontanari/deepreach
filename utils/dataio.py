@@ -131,6 +131,13 @@ class ReachabilityDataset(Dataset):
         device = 'cuda'
         MPC_states = self.sample_init_state()
 
+        # if hasattr(self, 'MPC_values'):
+        #     del self.MPC_values
+        #     del self.MPC_inputs  # free it to get some memory
+        #     del self.mpc_time_sorted_indices 
+        #     gc.collect()
+        #     torch.cuda.empty_cache()
+        #     print('DELETED')
         _, _, MPC_inputs, MPC_values = self.mpc.get_batch_data(
             MPC_states.cuda(), T, self.policy, t=t)  # Make sure to generate at least one batch of data at T, so we have "look-ahead" MPC labels for deepreach
         for i in tqdm(range(self.num_MPC_batches-1)):
@@ -184,6 +191,72 @@ class ReachabilityDataset(Dataset):
         del self.mpc  # free it to get some memory
         gc.collect()
         torch.cuda.empty_cache()
+        
+    def get_MPC_traj(self, T, t, style="random"):
+        print("Generating MPC dataset")
+        self.mpc = MPC.MPC(horizon=None, receding_horizon=self.MPC_receding_horizon, dT=self.MPC_dt, num_samples=self.num_MPC_perturbation_samples,
+                           dynamics_=self.dynamics, device='cuda', mode=self.MPC_mode,
+                           sample_mode=self.MPC_sample_mode, lambda_=self.MPC_lambda_, style=self.MPC_style, num_iterative_refinement=self.num_iterative_refinement)
+        device = 'cuda'
+        MPC_states = self.sample_init_state()
+        
+        costs, traj, MPC_inputs, MPC_values = self.mpc.get_batch_data(
+            MPC_states.cuda(), T, self.policy, t=t)  # Make sure to generate at least one batch of data at T, so we have "look-ahead" MPC labels for deepreach
+        for i in tqdm(range(self.num_MPC_batches-1)):
+            MPC_states = self.sample_init_state()
+
+            if self.mpc.style == "direct":
+                t_max = random.randint(1, math.floor(
+                    (T*1.1)/self.MPC_dt))*self.MPC_dt
+            elif self.mpc.style == "receding":
+                t_max = random.randint(1, int(
+                    T/self.MPC_dt/self.mpc.receding_horizon))*self.mpc.receding_horizon*self.MPC_dt
+                # t_max=T*1.0
+            else:
+                raise NotImplementedError
+
+            if style == "terminal" and i < self.num_MPC_batches/2:
+                t_max = T*1.0  # more data on the terminal time
+            # t_max=self.tMax
+            costs_, traj_, MPC_inputs_, MPC_values_ = self.mpc.get_batch_data(
+                MPC_states.to(device), t_max, self.policy, t=t)
+            MPC_inputs = torch.cat([MPC_inputs, MPC_inputs_], dim=0)
+            MPC_values = torch.cat([MPC_values, MPC_values_], dim=0)
+            # costs =  torch.cat([costs, costs_], dim=0)
+            # traj =  torch.cat([traj, traj_], dim=0)
+            
+        # print("Generated %d labels"%MPC_inputs.shape[0])
+        if style == "terminal":
+            # with more coords and values being at the terminal time
+            MPC_inputs_ = MPC_inputs[MPC_inputs[:, 0] == T, ...]
+            MPC_values_ = MPC_values[MPC_inputs[:, 0] == T, ...]
+
+            idxs = torch.randperm(MPC_inputs[MPC_inputs[:, 0] < T].shape[0])[
+                :int(MPC_inputs[MPC_inputs[:, 0] < T].shape[0]/1.5)]
+            MPC_inputs = torch.cat([MPC_inputs[idxs, ...], MPC_inputs_], dim=0)
+            MPC_values = torch.cat([MPC_values[idxs, ...], MPC_values_], dim=0)
+
+        # convert to memory-mapped tensor for faster query
+        if not os.path.exists("./data"):
+            os.makedirs("./data")
+        device_id = os.environ.get("CUDA_VISIBLE_DEVICES")
+        np.save("./data/MPC_inputs_gpu%s.npy" % device_id,
+                MPC_inputs.cpu().numpy(), allow_pickle=False)
+        np.save("./data/MPC_values_gpu%s.npy" % device_id,
+                MPC_values.cpu().numpy(), allow_pickle=False)
+        MPC_inputs_mmap = np.load(
+            "./data/MPC_inputs_gpu%s.npy" % device_id, mmap_mode="r")
+        MPC_values_mmap = np.load(
+            "./data/MPC_values_gpu%s.npy" % device_id, mmap_mode="r")
+        self.MPC_inputs = torch.from_numpy(MPC_inputs_mmap).detach()
+        self.MPC_values = torch.from_numpy(MPC_values_mmap).detach()
+        self.mpc_time_sorted_indices = torch.argsort(self.MPC_inputs[:, 0])
+        print("Generated %d labels" % MPC_inputs.shape[0])
+
+        del self.mpc  # free it to get some memory
+        gc.collect()
+        torch.cuda.empty_cache()
+        return costs, traj
 
     def __getitem__(self, idx):
         # uniformly sample domain and include coordinates where source is non-zero

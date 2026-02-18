@@ -221,6 +221,9 @@ class Experiment(ABC):
             self.model.eval()
             self.model.requires_grad_(False)
 
+        if len(train_losses) > 10000:
+            train_losses = train_losses[-5000:]
+
     
 
     def test(self, current_time, last_checkpoint, checkpoint_dt, dt, num_scenarios, num_violations, set_type, control_type, data_step, checkpoint_toload=None,
@@ -1051,6 +1054,7 @@ class Experiment(ABC):
         if was_training:
             self.model.train()
             self.model.requires_grad_(True)
+        fig.savefig(save_path)
 
     def adjust_rel_weight(self, losses, MPC_decay_scheme, epoch, epochs, model_input):
         if self.dataset.dynamics.deepReach_model in ['vanilla', 'diff'] and losses['diff_constraint_hom'] > 0.01:
@@ -1063,6 +1067,7 @@ class Experiment(ABC):
             for key, param in params.items():
                 grads_PDE.append(param.grad.view(-1))
             grads_PDE = torch.cat(grads_PDE)
+            del grads_PDE
 
             # Gradients with respect to the boundary loss
             self.optim.zero_grad()
@@ -1071,6 +1076,7 @@ class Experiment(ABC):
             for key, param in params.items():
                 grads_dirichlet.append(param.grad.view(-1))
             grads_dirichlet = torch.cat(grads_dirichlet)
+            del grads_dirichlet
 
             # Set the new weight according to the paper
             # num = torch.max(torch.abs(grads_PDE))
@@ -1138,6 +1144,9 @@ class Experiment(ABC):
             # num = torch.max(torch.abs(grads_PDE))
             den = torch.mean(torch.abs(grads_mpc))
             num = torch.mean(torch.abs(grads_PDE))
+
+            # del grads_PDE
+            # del grads_mpc 
             
             self.loss_weights['mpc_loss'] =min( 0.9*self.loss_weights['mpc_loss'] + 0.1*self.mpc_importance_coef*num/(den+1e-16), 1e5)
 

@@ -601,7 +601,7 @@ class NarrowPassage(Dynamics):
         print(f'Avoid only: {avoid_only}')
 
         super().__init__(
-            loss_type="brt_hjivi" if self.avoid_only else "brt_hjivi",
+            loss_type="brt_hjivi" if self.avoid_only else "brat_hjivi",
             set_mode="avoid" if self.avoid_only else "reach",
             state_dim=10,
             input_dim=11,
@@ -1625,14 +1625,16 @@ class PlanarQuadrotorEqBRAT(Dynamics):
 
         self.thrust_max = thrust_max
 
-        self.goal_vx = [-0.05, 0.05]
-        self.goal_vy = [-0.05, 0.05]
+        self.goal_vx = [-0.15, 0.15]
+        self.goal_vy = [-0.15, 0.15]
 
         self.goal_w = [-0.05, 0.05]
         self.goal_theta = [-0.05, 0.05]
 
         self.avoid_only = avoid_only
         self.avoid_fn_weight = avoid_fn_weight
+
+
 
         super().__init__(
             loss_type="brt_hjivi" if self.avoid_only else "brat_hjivi",
@@ -1642,13 +1644,22 @@ class PlanarQuadrotorEqBRAT(Dynamics):
             control_dim=2,
             disturbance_dim=0,
             state_mean=[0 for i in range(6)],
-            state_var=[10, 5, math.pi / 2, 10, 10, 2 * math.pi * 20],
+            state_var=[10, 5, math.pi , 10, 10, 2 * math.pi * 20],
             value_mean=0,
             value_var=1,
             value_normto=0.02,
             deepreach_model="exact",
         )
 
+        self.state_range_ = torch.tensor([
+            [-self.state_var[0], self.state_var[0]],
+            [-self.state_var[1], self.state_var[1]],
+            [-self.state_var[2], self.state_var[2]],
+            [-self.state_var[3], self.state_var[3]],
+            [-self.state_var[4], self.state_var[4]],
+            [-self.state_var[5], self.state_var[5]]
+            ]).cuda()
+        
     def state_test_range(self):
         return [
             [
@@ -1679,6 +1690,8 @@ class PlanarQuadrotorEqBRAT(Dynamics):
 
     def equivalent_wrapped_state(self, state):
         wrapped_state = torch.clone(state)
+        wrapped_state[..., 2] = (
+            wrapped_state[..., 2] + math.pi) % (2 * math.pi) - math.pi
         return wrapped_state
 
     def dsdt(self, state, control, disturbance):
@@ -1723,16 +1736,24 @@ class PlanarQuadrotorEqBRAT(Dynamics):
 
     def avoid_fn(self, state):  # if violation, > 0
         # distance from x,y,thaeta lim
-        dist_u =  torch.tensor(
-            [self.state_var[0], self.state_var[1]*0.75, self.state_var[2]],
-            device=state.device,
-        ) - state[..., :3]
-        dist_l = state[..., :3] + torch.tensor(
-            [[-self.state_var[0], -self.state_var[1], -self.state_var[2]]],
-            device=state.device,
-        )
-
-        return self.avoid_fn_weight * torch.max(torch.cat([dist_u,dist_l],dim=1),dim=1).values
+        # dist_l =  torch.tensor(
+        #     [self.state_var[0], self.state_var[1]],
+        #     device=state.device,
+        # ) - state[..., :2]
+        # dist_u = state[..., :2] + torch.tensor(
+        #     [[-self.state_var[0], -self.state_var[1]]],
+        #     device=state.device,
+        # )
+        device = state.device.type
+        # if < 0 violation, then sign inverted
+        if 'cuda' in device:
+            g_l =  state[...,0:2] - self.state_range_[:2, 0]
+            g_u = self.state_range_[:2,1] - state[...,0:2] 
+        else:
+            g_l =  state[...,0:2] - self.state_range_[:2,0].cpu()
+            g_u = self.state_range_[:2,1].cpu() - state[...,0:2] 
+       
+        return self.avoid_fn_weight * torch.min(torch.cat([g_l,g_u],dim=1),dim=1).values
 
     def boundary_fn(self, state):
         if len(state.shape)== 3 and state.shape[0] == 1:
@@ -1746,16 +1767,9 @@ class PlanarQuadrotorEqBRAT(Dynamics):
         raise NotImplementedError
 
     def cost_fn(self, state_traj):
-        # return min_t max{l(x(t)), max_k_up_to_t{-g(x(k))}}, where l(x) is reach_fn, g(x) is avoid_fn
-        reach_values = self.reach_fn(state_traj)
-        avoid_values = self.avoid_fn(state_traj)
-        # return torch.min(torch.clamp(reach_values, min=torch.max(-avoid_values, dim=-1).values.unsqueeze(-1)),dim=-1).values
-        return torch.min(
-            torch.maximum(reach_values, torch.cummax(-avoid_values, dim=-1).values),
-            dim=-1,
-        ).values
+        raise NotImplementedError
 
-    def hamiltonian(self, state, dvds):
+    def hamiltonian(self, state, dvds): 
         if self.set_mode == "reach":
             s_x = state[..., 0] * 1.0
             s_y = state[..., 1] * 1.0

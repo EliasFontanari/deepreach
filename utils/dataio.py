@@ -21,7 +21,7 @@ class ReachabilityDataset(Dataset):
 
     def __getitem__(self, idx):
         # uniformly sample domain and include coordinates where source is non-zero 
-        model_states = torch.zeros(self.numpoints, self.dynamics.state_dim).uniform_(-1, 1)
+        model_states = torch.zeros(self.numpoints, self.dynamics.state_dim).uniform_(-1, 1)   # 65000 x state_dim 
         if self.num_target_samples > 0:
             target_state_samples = self.dynamics.sample_target_state(self.num_target_samples)
             model_states[-self.num_target_samples:] = self.dynamics.coord_to_input(torch.cat((torch.zeros(self.num_target_samples, 1), target_state_samples), dim=-1))[:, 1:self.dynamics.state_dim+1]

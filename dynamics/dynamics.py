@@ -1616,20 +1616,20 @@ class MultiVehicleCollision(Dynamics):
 
 
 class PlanarQuadrotorEqBRAT(Dynamics):
-    def __init__(self, thrust_max: float, avoid_only: bool, avoid_fn_weight: float):
-        self.thrust_max = thrust_max
+    def __init__(self,  avoid_only: bool, avoid_fn_weight: float):
+
+        print(f'avoid_only: {avoid_only}')
         self.mass = 1  # mass
-        self.J = 1  # inertia
+        self.J = 0.1  # inertia
         self.arm_l = 0.2
         self.Gz = -9.8
-
-        self.thrust_max = thrust_max
+        self.thrust_max = -4*self.Gz
 
         self.goal_vx = [-0.15, 0.15]
         self.goal_vy = [-0.15, 0.15]
 
         self.goal_w = [-0.05, 0.05]
-        self.goal_theta = [-0.05, 0.05]
+        self.goal_theta = [-0.15, 0.15]
 
         self.avoid_only = avoid_only
         self.avoid_fn_weight = avoid_fn_weight
@@ -1711,17 +1711,15 @@ class PlanarQuadrotorEqBRAT(Dynamics):
         return dsdt
 
     def reach_fn(self, state):  # where < 0 reached
-        if self.avoid_only:
-            raise RuntimeError
 
-        upper_x = torch.tensor([self.goal_vx[0]], device=state.device)
-        lower_x = torch.tensor([self.goal_vx[1]], device=state.device)
-        upper_y = torch.tensor([self.goal_vy[0]], device=state.device)
-        lower_y = torch.tensor([self.goal_vy[1]], device=state.device)
-        upper_theta = torch.tensor([self.goal_theta[0]], device=state.device)
-        lower_theta = torch.tensor([self.goal_theta[1]], device=state.device)
-        upper_w = torch.tensor([self.goal_w[0]], device=state.device)
-        lower_w = torch.tensor([self.goal_w[1]], device=state.device)
+        upper_x = torch.tensor([self.goal_vx[1]], device=state.device)
+        lower_x = torch.tensor([self.goal_vx[0]], device=state.device)
+        upper_y = torch.tensor([self.goal_vy[1]], device=state.device)
+        lower_y = torch.tensor([self.goal_vy[0]], device=state.device)
+        upper_theta = torch.tensor([self.goal_theta[1]], device=state.device)
+        lower_theta = torch.tensor([self.goal_theta[0]], device=state.device)
+        upper_w = torch.tensor([self.goal_w[1]], device=state.device)
+        lower_w = torch.tensor([self.goal_w[0]], device=state.device)
 
         u_x = state[..., 3] - upper_x
         l_x = lower_x - state[..., 3]
@@ -1732,7 +1730,9 @@ class PlanarQuadrotorEqBRAT(Dynamics):
         # u_w = state[..., 5] - upper_w
         # l_w = lower_w - state[..., 5]
 
-        return torch.max(torch.stack([u_x, l_x, u_y, l_y],dim=0),dim=0).values
+        return torch.max(torch.stack([u_x, l_x, u_y, l_y],dim=0),dim=0).values #,u_theta,l_theta,u_w,l_w
+        # return torch.norm(state[..., 3:5], dim=-1) - 1.5
+
 
     def avoid_fn(self, state):  # if violation, > 0
         # distance from x,y,thaeta lim
@@ -1759,12 +1759,21 @@ class PlanarQuadrotorEqBRAT(Dynamics):
         if len(state.shape)== 3 and state.shape[0] == 1:
             state = state.squeeze(0)
         if self.avoid_only:
-            return self.avoid_fn(state)
+            return self.reach_fn(state)
         else:
             return torch.maximum(self.reach_fn(state), -self.avoid_fn(state)) #return self.reach_fn(state) #  
 
     def sample_target_state(self, num_samples):
-        raise NotImplementedError
+        target_state_range = self.state_test_range()
+        target_state_range[3] = [self.goal_vx[0], self.goal_vx[1]]  # y in [-20, 20]
+        target_state_range[4] = [self.goal_vy[0], self.goal_vy[1]]  # z in [10, 20]
+        target_state_range[5] = [self.goal_w[0], self.goal_w[1]]  # z in [10, 20]
+        target_state_range[2] = [self.goal_theta[0], self.goal_theta[1]]  # z in [10, 20]
+
+        target_state_range = torch.tensor(target_state_range)
+        return target_state_range[:, 0] + torch.rand(num_samples, self.state_dim) * (
+            target_state_range[:, 1] - target_state_range[:, 0]
+        )
 
     def cost_fn(self, state_traj):
         raise NotImplementedError
@@ -1851,7 +1860,7 @@ class PlanarQuadrotorEqBRAT(Dynamics):
             ],
             "x_axis_idx": 3,
             "y_axis_idx": 4,
-            "z_axis_idx": 1,
+            "z_axis_idx": 0,
         }
     
 class QuadrotorReach(Dynamics):

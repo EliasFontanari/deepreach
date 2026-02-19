@@ -113,9 +113,9 @@ if (mode == 'all') or (mode == 'train'):
     # MPC dataset generation
     p.add_argument('--time_till_refinement', type=float, default=0.2,
                    help='H_R in the paper, which is the effective MPC horizon')
-    p.add_argument('--MPC_batch_size', type=int, default=10000,
+    p.add_argument('--MPC_batch_size', type=int, default=1000,
                    help='generate MPC data with N init states in a parallel manner') # working fine but tunable when GPU memory is limited
-    p.add_argument('--num_MPC_batches', type=int, default=30,
+    p.add_argument('--num_MPC_batches', type=int, default=300,
                    help='total number of MPC batches generated. Dataset size=MPC batch size * num_batches before bootstrapping')
     p.add_argument('--num_MPC_perturbation_samples', type=int, default=100,
                    help='Number of MPC samples') # working fine but tunable

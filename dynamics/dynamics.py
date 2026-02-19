@@ -2057,7 +2057,7 @@ class PlanarQuadrotorEqBRAT(Dynamics):
         return dsdt
 
     def reach_fn(self, state):  # where < 0 reached
-        tol = 7e-2
+        tol = 5e-2
 
         # x = state[..., 0] * 1.0
         # y = state[..., 1] * 1.0
@@ -2092,15 +2092,15 @@ class PlanarQuadrotorEqBRAT(Dynamics):
             g_u = state[...,0:2] -  self.state_range_[0:2, 1].cpu()
         # Stack both, then find global maximum across all dimensions
         combined = torch.stack([g_l, g_u], dim=-1)  # Shape: (batch, state_dim, 2)
-        max_bounds = combined.max(dim=-1).values.max(dim=-1).values  # Max over both state_dim and the 2 tensors
+        min_g = combined.min(dim=-1).values.min(dim=-1).values  # Max over both state_dim and the 2 tensors
 
-        return max_bounds
+        return min_g
 
     def boundary_fn(self, state):
         if self.set_mode=='avoid':
             raise NotImplementedError
         elif self.set_mode=='reach_avoid':
-            return torch.maximum(self.reach_fn(state), self.avoid_fn(state))
+            return torch.maximum(self.reach_fn(state), -self.avoid_fn(state))
         elif self.set_mode=='reach':
             return self.reach_fn(state)
 
@@ -2116,7 +2116,8 @@ class PlanarQuadrotorEqBRAT(Dynamics):
             # return min_t max{l(x(t)), max_k_up_to_t{-g(x(k))}}, where l(x) is reach_fn, g(x) is avoid_fn
             reach_values = self.reach_fn(state_traj)
             avoid_values = self.avoid_fn(state_traj)
-            return torch.min(torch.clamp(reach_values, min=torch.max(avoid_values, dim=-1).values.unsqueeze(-1)),dim=-1).values
+            return torch.min(torch.clamp(reach_values, min=torch.max(-avoid_values, dim=-1).values.unsqueeze(-1)),dim=-1).values
+
 
     def hamiltonian(self, state, dvds):
         if self.set_mode in ['reach', 'reach_avoid']:

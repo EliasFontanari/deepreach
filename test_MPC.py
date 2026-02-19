@@ -277,7 +277,7 @@ init_states = dataset.sample_init_state()
 costs, MPC_traj = dataset.get_MPC_traj(opt.tMax,0)
 
 print(f'Shape of MPC traj {MPC_traj.shape}')
-print(f'RPY: {dataset.dynamics.quat_to_rpy_torch(MPC_traj)}')
+# print(f'RPY: {dataset.dynamics.quat_to_rpy_torch(MPC_traj)}')
 
 avoid_costs = dataset.dynamics.avoid_fn(MPC_traj)
 reach_costs = dataset.dynamics.reach_fn(MPC_traj)
@@ -295,8 +295,8 @@ index_to_plot = np.argsort(costs)[:100]
 print(f'Minimum costs {costs[index_to_plot]}')
 
 import matplotlib.pyplot as plt
-labels = ['x','y','z','qw','qx','qy','qz','vx','vy','vz','wx','wy','wz']
-# labels = ['x','y','theta','vx','vy','w']
+# labels = ['x','y','z','qw','qx','qy','qz','vx','vy','vz','wx','wy','wz']
+labels = ['x','y','theta','vx','vy','w']
 for i in range(5):
     num_states = dynamics.state_dim
     fig, axes = plt.subplots(int(num_states/3) + num_states % 3, 3, figsize=(16, 12))

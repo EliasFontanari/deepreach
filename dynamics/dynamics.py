@@ -1678,7 +1678,7 @@ class PlanarQuadrotorEqBRAT(Dynamics):
         self.Gz = -9.81
         self.thrust_max = -4*self.Gz
         self.mass = 1  # mass
-        self.J = 1  # inertia
+        self.J = 0.1  # inertia
         self.arm_l = 0.2
 
         self.goal_vx = [-0.05, 0.05]
@@ -1781,7 +1781,7 @@ class PlanarQuadrotorEqBRAT(Dynamics):
 
         # l = torch.stack([u_vx, u_vy, u_vz, u_qx, u_qy, u_wx, u_wy, l_vx, l_vy, l_vz, l_qx, l_qy, l_wx, l_wy], dim=-1)
         l = torch.stack([u_vx, u_vy, u_w, u_th, l_vx, l_vy , l_w, l_th], dim=-1)
-        l =  torch.stack([u_vx, u_vy, l_vx, l_vy, u_w,l_w ], dim=-1)
+        l =  torch.stack([u_vx, u_vy, l_vx, l_vy, u_w,l_w, u_th,l_th ], dim=-1)
         # l = torch.stack([u_vx, u_vy, u_vz, u_wx, l_wx, l_vx, l_vy, l_vz, u_wy, l_wy], dim=-1)
 
         return torch.max(l, dim=-1)[0]

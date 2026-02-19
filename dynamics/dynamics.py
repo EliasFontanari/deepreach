@@ -1761,7 +1761,7 @@ class PlanarQuadrotorEqBRAT(Dynamics):
         return dsdt
 
     def reach_fn(self, state):  # where < 0 reached
-        tol = 10e-2
+        tol = 4e-2
 
         # x = state[..., 0] * 1.0
         # y = state[..., 1] * 1.0

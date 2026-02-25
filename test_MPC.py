@@ -295,9 +295,9 @@ index_to_plot = np.argsort(costs)[:100]
 print(f'Minimum costs {costs[index_to_plot]}')
 
 import matplotlib.pyplot as plt
-# labels = ['x','y','z','qw','qx','qy','qz','vx','vy','vz','wx','wy','wz']
-labels = ['x','y','theta','vx','vy','w']
-for i in range(5):
+labels = ['x','y','z','qw','qx','qy','qz','vx','vy','vz','wx','wy','wz']
+# labels = ['x','y','theta','vx','vy','w']
+for i in range(13):
     num_states = dynamics.state_dim
     fig, axes = plt.subplots(int(num_states/3) + num_states % 3, 3, figsize=(16, 12))
     fig.suptitle(f'', fontsize=16, fontweight='bold')

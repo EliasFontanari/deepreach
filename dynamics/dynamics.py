@@ -1270,8 +1270,8 @@ class LessLinearND(Dynamics):
         }
 
 class QuadrotorReachAvoid(Dynamics):
-    def __init__(self, collisionR: float, collective_thrust_max: float,  set_mode: str):  # simpler quadrotor
-        self.collective_thrust_max = collective_thrust_max
+    def __init__(self,  set_mode: str):  # simpler quadrotor
+        self.collective_thrust_max = 30.
         # self.body_rate_acc_max = body_rate_acc_max
         self.m = 1  # mass
         self.arm_l = 0.17
@@ -1287,24 +1287,23 @@ class QuadrotorReachAvoid(Dynamics):
         self.dist_dwz_max = 0
         self.dist_f = 0
 
-        self.collisionR = collisionR
         self.reach_fn_weight = 1.
         self.avoid_fn_weight = 0.3
         self.state_range_ = torch.tensor([
-            [-3.0, 3.0],
-            [-3.0, 3.0],
-            [-3.0, 3.0],
-            [-1.0, 1.0],
-            [-1.0, 1.0],
-            [-1.0, 1.0],
-            [-1.0, 1.0],
-            [-5.0, 5.0],
-            [-5.0, 5.0],
-            [-5.0, 5.0],
-            [-5.0, 5.0],
-            [-5.0, 5.0],
-            [-5.0, 5.0],
-            ]).cuda()
+            [-4, 4],
+            [-4, 4],
+            [-4, 4],
+            [-1, 1],
+            [-1, 1],
+            [-1, 1],
+            [-1, 1],
+            [-10, 10],
+            [-10, 10],
+            [-10, 10],
+            [-10, 10],
+            [-10, 10],
+            [-10, 10],
+            ], dtype=torch.float64).cuda()
         self.control_range_ =torch.tensor([[-self.collective_thrust_max, self.collective_thrust_max],
                 [-self.dwx_max, self.dwx_max],
                 [-self.dwy_max, self.dwy_max],
@@ -1314,6 +1313,16 @@ class QuadrotorReachAvoid(Dynamics):
 
         state_mean_=(self.state_range_[:,0]+self.state_range_[:,1])/2.0
         state_var_=(self.state_range_[:,1]-self.state_range_[:,0])/2.0
+
+        self.goal_vx = [-0.1, 0.1]
+        self.goal_vy = [-0.1, 0.1]
+        self.goal_vz = [-0.1, 0.1]
+
+        self.goal_wx = [-0.05, 0.05]
+        self.goal_wy = [-0.05, 0.05]
+        self.goal_roll = [-0.05, 0.05]
+        self.goal_pitch = [-0.05, 0.05]
+
         if set_mode=='reach_avoid':
             l_type='brat_hjivi'
         else:
@@ -1328,6 +1337,73 @@ class QuadrotorReachAvoid(Dynamics):
             value_normto=0.05,
             deepReach_model='exact',
         )
+    
+    def sample_quaternion_small_roll_pitch(
+        self,
+        roll_range=(-0.1, 0.1),
+        pitch_range=(-0.1, 0.1),
+        yaw_range=(-np.pi, np.pi),
+        n_samples=1,
+    ):
+        roll = np.random.uniform(*roll_range, size=n_samples)
+        pitch = np.random.uniform(*pitch_range, size=n_samples)
+        yaw = np.random.uniform(*yaw_range, size=n_samples)
+
+        cr, sr = np.cos(roll / 2), np.sin(roll / 2)
+        cp, sp = np.cos(pitch / 2), np.sin(pitch / 2)
+        cy, sy = np.cos(yaw / 2), np.sin(yaw / 2)
+
+        # ZYX convention, output [w, x, y, z] to match quat_to_rpy_torch
+        w = cr * cp * cy + sr * sp * sy
+        x = sr * cp * cy - cr * sp * sy
+        y = cr * sp * cy + sr * cp * sy
+        z = cr * cp * sy - sr * sp * cy
+
+        quats = np.stack([w, x, y, z], axis=-1)  # [w, x, y, z]
+        quats /= np.linalg.norm(quats, axis=-1, keepdims=True)
+
+        if n_samples == 1:
+            return quats[0]
+        return quats
+    
+    def sample_target_state(self, num_samples):
+        target_state_range = self.state_test_range()
+        target_state_range[7] = [self.goal_vx[0], self.goal_vx[1]]  # y in [-20, 20]
+        target_state_range[8] = [self.goal_vy[0], self.goal_vy[1]]  # z in [10, 20]
+        target_state_range[9] = [self.goal_vz[0], self.goal_vz[1]]  # z in [10, 20]
+        target_state_range[10] = [self.goal_wx[0], self.goal_wx[1]]  # z in [10, 20]
+        target_state_range[11] = [self.goal_wy[0], self.goal_wy[1]]  # z in [10, 20]
+
+        target_state_range = torch.tensor(target_state_range)
+        target_state_range = target_state_range[:, 0] + torch.rand(
+            num_samples, self.state_dim
+        ) * (target_state_range[:, 1] - target_state_range[:, 0])
+
+        quat_in_target = torch.tensor(
+            self.sample_quaternion_small_roll_pitch(
+                pitch_range=(self.goal_pitch[0], self.goal_pitch[1]),
+                roll_range=(self.goal_roll[0], self.goal_roll[1]),
+                n_samples=num_samples,
+            )
+        )
+        rpy = self.quat_to_rpy_torch(quat_in_target)
+
+        # hard clamp - resample the ones out of range
+        mask = (rpy[:,0].abs() > self.goal_roll[1]) | (rpy[:,1].abs() > self.goal_pitch[1])
+        while mask.any():
+            n_resample = mask.sum().item()
+            new_quats = torch.tensor(self.sample_quaternion_small_roll_pitch(
+                pitch_range=(self.goal_pitch[0], self.goal_pitch[1]),
+                roll_range=(self.goal_roll[0], self.goal_roll[1]),
+                n_samples=n_resample
+            ))
+            quat_in_target[mask] = new_quats
+            rpy = self.quat_to_rpy_torch(quat_in_target)
+            mask = (rpy[:,0].abs() > self.goal_roll[1]) | (rpy[:,1].abs() > self.goal_pitch[1])
+        target_state_range[..., 3:7] = quat_in_target
+
+        return target_state_range
+    
     def normalize_q(self, x):
         # normalize quaternion
         normalized_x = x*1.0
@@ -1435,10 +1511,6 @@ class QuadrotorReachAvoid(Dynamics):
         return torch.stack([roll, pitch, yaw], dim=-1)
 
     def reach_fn(self, state):
-        tol = 3e-2
-        tol_q = 0.08
-        tol_w = 0.05
-        weight_w = 100
 
         # x = state[..., 0] * 1.0
         # y = state[..., 1] * 1.0
@@ -1453,75 +1525,82 @@ class QuadrotorReachAvoid(Dynamics):
         wx = state[..., 10] * 1.0
         wy = state[..., 11] * 1.0
         wz = state[..., 12] * 1.0
-        
-        rpy = self.quat_to_rpy_torch(state[...,3:7])
-        pitch = rpy[...,0]
-        roll = rpy[...,1]
 
-        u_vx = vx - tol
-        l_vx = -tol - vx
-        u_vy = vy - tol
-        l_vy = -tol - vy
-        u_vz = vz - tol
-        l_vz = -tol - vz
-        u_pitch = pitch - tol_q
-        l_pitch = -tol_q - pitch
-        u_roll = roll - tol_q
-        l_roll = -tol_q - roll
-        u_wx = (wx - tol_w) *weight_w 
-        l_wx = (-tol_w - wx) * weight_w
-        u_wy = (wy - tol_w) * weight_w
-        l_wy = (-tol_w - wy) * weight_w
+        rpy = self.quat_to_rpy_torch(state[..., 3:7])
+        pitch = rpy[..., 0]
+        roll = rpy[..., 1]
+
+        upper_x = torch.tensor([self.goal_vx[1]], device=state.device)
+        lower_x = torch.tensor([self.goal_vx[0]], device=state.device)
+        upper_y = torch.tensor([self.goal_vy[1]], device=state.device)
+        lower_y = torch.tensor([self.goal_vy[0]], device=state.device)
+        upper_z = torch.tensor([self.goal_vz[1]], device=state.device)
+        lower_z = torch.tensor([self.goal_vz[0]], device=state.device)
+        upper_pitch = torch.tensor([self.goal_pitch[1]], device=state.device)
+        lower_pitch = torch.tensor([self.goal_pitch[0]], device=state.device)
+        upper_roll = torch.tensor([self.goal_roll[1]], device=state.device)
+        lower_roll = torch.tensor([self.goal_roll[0]], device=state.device)
+        upper_wx = torch.tensor([self.goal_wx[1]], device=state.device)
+        lower_wx = torch.tensor([self.goal_wx[0]], device=state.device)
+        upper_wy = torch.tensor([self.goal_wy[1]], device=state.device)
+        lower_wy = torch.tensor([self.goal_wy[0]], device=state.device)
+
+        u_vx = state[..., 7] - upper_x
+        l_vx = lower_x - state[..., 7]
+        u_vy = state[..., 8] - upper_y
+        l_vy = lower_y - state[..., 8]
+        u_vz = state[..., 9] - upper_z
+        l_vz = lower_z - state[..., 9]
+
+        u_wx = state[..., 10] - upper_wx
+        l_wx = lower_wx - state[..., 10]
+        u_wy = state[..., 11] - upper_wy
+        l_wy = lower_wy - state[..., 11]
+
+        u_pitch = pitch - upper_pitch
+        l_pitch = lower_pitch - pitch
+        u_roll = roll - upper_roll
+        l_roll = lower_roll - roll
 
         # l = torch.stack([u_vx, u_vy, u_vz, u_pitch, u_roll, u_wx, u_wy, l_vx, l_vy, l_vz, l_pitch, l_roll, l_wx, l_wy], dim=-1)
         # l = torch.stack([u_vx, u_vy, u_vz, u_qx, u_qy, l_qx,l_qy, l_vx, l_vy, l_vz], dim=-1)
         # l = torch.stack([u_vx, u_vy, u_vz, l_vx, l_vy, l_vz, u_wx,l_wx,u_wy,l_wy], dim=-1)
         # l = torch.stack([u_pitch, l_pitch,u_roll,l_roll,u_wx,u_wy,l_wx,l_wy,u_vx,l_vx, u_vy,l_vy,u_vz,l_vz], dim=-1)
-        l = torch.stack([u_pitch, l_pitch,u_roll,l_roll,u_vx,l_vx, u_vy,l_vy, u_wx,l_wx], dim=-1)
-        
-
+        l = torch.stack(
+            [
+                u_pitch,
+                l_pitch,
+                u_roll,
+                l_roll,
+                u_vx,
+                l_vx,
+                u_vy,
+                l_vy,
+                u_vz,
+                l_vz,
+                u_wx,
+                l_wx,
+                u_wy,
+                l_wy,
+            ],
+            dim=-1,
+        )
 
         return torch.max(l, dim=-1)[0]
 
-    def dist_to_cylinder(self, state, a, b):
-        '''for cylinder with full body collision'''
-        state_=state*1.0
-        state_[...,0]=state_[...,0]- a
-        state_[...,1]=state_[...,1]- b
-
-        # create normal vector
-        v = torch.zeros_like(state_[..., 4:7])
-        v[..., 2] = 1
-        v = quaternion.quaternion_apply(state_[..., 3:7], v)
-        vx = v[..., 0]
-        vy = v[..., 1]
-        vz = v[..., 2]
-        # compute vector from center of quadrotor to the center of cylinder
-        px = state_[..., 0]
-        py = state_[..., 1]
-
-        # get full body distance
-        dist = torch.norm(state_[..., :2], dim=-1)
-        # return dist- self.collisionR
-        dist = dist- torch.sqrt((self.arm_l**2*px**2*vz**2)/(px**2*vx**2 + px**2*vz**2 + 2*px*py*vx*vy + py**2*vy**2 + py**2*vz**2)
-                           + (self.arm_l**2*py**2*vz**2)/(px**2*vx**2 + px**2*vz**2 + 2*px*py*vx*vy + py**2*vy**2 + py**2*vz**2))
-        return torch.maximum(dist, torch.zeros_like(dist)) - self.collisionR
-
-
-    # def avoid_fn(self, state):
-    #     return self.avoid_fn_weight*torch.minimum(self.dist_to_cylinder(state,0.0,0.75), self.dist_to_cylinder(state,0.0,-0.75))
-
     def avoid_fn(self, state):
         device = state.device.type
-        if 'cuda' in device:
-            g_l =  state[...,0:3] - self.state_range_[0:3, 0] 
-            u_l = self.state_range_[0:3, 1] - state[...,0:3] 
+        if "cuda" in device:
+            g_l = state[..., 0:3] - self.state_range_[0:3, 0]
+            u_l = self.state_range_[0:3, 1] - state[..., 0:3]
         else:
-            g_l =  state[...,0:3] - self.state_range_[0:3, 0].cpu()
-            u_l = self.state_range_[0:3, 1].cpu() - state[...,0:3] 
+            g_l = state[..., 0:3] - self.state_range_[0:3, 0].cpu()
+            u_l = self.state_range_[0:3, 1].cpu() - state[..., 0:3]
         # Stack both, then find global maximum across all dimensions
         combined = torch.stack([g_l, u_l], dim=-1)  # Shape: (batch, state_dim, 2)
-        min_g = combined.min(dim=-1).values.min(dim=-1).values  # Max over both state_dim and the 2 tensors
+        min_g = (
+            combined.min(dim=-1).values.min(dim=-1).values
+        )  # Max over both state_dim and the 2 tensors
 
         return min_g
 
@@ -1667,7 +1746,7 @@ class QuadrotorReachAvoid(Dynamics):
 
     def plot_config(self):
         return {
-            'state_slices': [0.96,  1.18,  0.54,  0.44, -0.45,  0.27, -0.73, -2.83, -1.07, -3.34, 3.19, -2.80,  3.43],
+            'state_slices': [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             'state_labels': ['x', 'y', 'z', 'qw', 'qx', 'qy', 'qz', 'vx', 'vy', 'vz', 'wx', 'wy', 'wz'],
             'x_axis_idx': 7,
             'y_axis_idx': 8,

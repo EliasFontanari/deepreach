@@ -1612,13 +1612,6 @@ class QuadrotorReachAvoid(Dynamics):
         elif self.set_mode=='reach':
             return self.reach_fn(state)
 
-    def sample_target_state(self, num_samples):
-        target_state_range = self.state_test_range()
-        target_state_range[0] = [-1, 1]
-        target_state_range[1] = [-0.25, 0.25]
-        target_state_range = torch.tensor(target_state_range)
-        return target_state_range[:, 0] + torch.rand(num_samples, self.state_dim)*(target_state_range[:, 1] - target_state_range[:, 0])
-
     def cost_fn(self, state_traj):
         if self.set_mode=='avoid':
             return torch.min(self.boundary_fn(state_traj), dim=-1).values

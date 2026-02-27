@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 dt = 0.005
-T_max = 0.5
+T_max = 0.05
 
 collective_thrust_max = 30.0
 # body_rate_acc_max = body_rate_acc_max
@@ -46,7 +46,7 @@ state_range = np.array(
             ],dtype=np.float64
         )
 
-x_0 = np.array([1.,0,0,1,0.0,-0.0,0.,1,0,0,.0,1,0])
+x_0 = np.array([1.,0,0,1,0.0,0.0,0.,1,1,0,.0,0,0])
 N = int(T_max / dt)
 
 opti = Opti()
@@ -116,8 +116,9 @@ for k in range(N): # loop over control intervals
 #    x_next[3:7] = x_next[3:7] / norm_2(x_next[3:7])
    opti.subject_to(X[:,k+1]==x_next) # close the gaps
    opti.set_initial(X,X_guess)
-   x_cost = vertcat(X[4:6,-1], X[7:12])
-#    cost += x_cost[:3].T @ Q[:3,:3] @ x_cost[:3]
+#    rpy = quat_to_rpy_casadi(X[3:7,k])
+   x_cost = vertcat(X[4:6,k], X[7:12,k])
+   cost += x_cost[:3].T @ Q[:3,:3] @ x_cost[:3]
 
 #    # Quaternion unit norm constraint at each knot point
 # for k in range(N+1):
@@ -152,17 +153,27 @@ opti.subject_to(opti.bounded(goal_vz[0],X[9,-1],goal_vz[1]))
 opti.subject_to(opti.bounded(goal_wx[0],X[10,-1],goal_wx[1]))
 opti.subject_to(opti.bounded(goal_wy[0],X[11,-1],goal_wy[1]))
 
-# rpy = quat_to_rpy_casadi(X[3:7,-1])
+rpy = quat_to_rpy_casadi(X[3:7,-1])
 
-# opti.subject_to(opti.bounded(goal_roll[0],rpy[0],goal_roll[1]))
-# opti.subject_to(opti.bounded(goal_pitch[0],rpy[1],goal_pitch[1]))
+opti.subject_to(opti.bounded(goal_roll[0],rpy[0],goal_roll[1]))
+opti.subject_to(opti.bounded(goal_pitch[0],rpy[1],goal_pitch[1]))
 
 # ---- objective          ---------
 opti.minimize(1)  # just respect constraint
 
 # ---- solve NLP              ------
 # opti.solver("ipopt") # set numerical backend
-opti.solver('ipopt', {}, {'print_level': 5})
+# Set solver with options
+opts = {
+    'ipopt.tol': 1e-4,           # Overall convergence tolerance
+    # 'ipopt.constr_viol_tol': 1e-6,  # Constraint violation tolerance
+    # 'ipopt.dual_inf_tol': 1e-6,     # Dual infeasibility tolerance
+    # 'ipopt.compl_inf_tol': 1e-6,    # Complementarity tolerance
+    # 'ipopt.max_iter': 1000,         # Max iterations
+    # 'ipopt.acceptable_tol': 1e-6,   # Acceptable (relaxed) tolerance
+    # 'ipopt.print_level': 5,         # Verbosity (0=silent, 5=verbose)
+}
+opti.solver('ipopt', opts)
 sol = opti.solve()   # actual solve
 
 

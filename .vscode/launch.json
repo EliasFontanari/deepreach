@@ -1,0 +1,63 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            // "args": [
+            //     "--mode", "train",
+            //     "--experiment_name", "Quadrotor",
+            //     "--dynamics_class", "Quadrotor",
+            //     "--tMax", "1",
+            //     "--pretrain",
+            //     "--pretrain_iters", "1000",
+            //     "--num_epochs", "104000",
+            //     "--counter_end", "100000",
+            //     "--num_nl", "512",
+            //     "--collisionR", "0.5",
+            //     "--collective_thrust_max", "20",
+            //     "--set_mode", "avoid",
+            //     "--lr", "2e-5",
+            //     "--num_MPC_batches", "20",
+            //     "--epochs_til_ckpt", "100"
+            // ]
+        //     "args": [
+        //     "--mode", "train",
+        //     "--experiment_name", "VD",
+        //     "--dynamics_class", "VertDrone2D",
+        //     "--tMax", "1.2",
+        //     "--pretrain",
+        //     "--pretrain_iters", "1000",
+        //     "--num_epochs", "10000",
+        //     "--counter_end", "6000",
+        //     "--num_nl", "128",
+        //     "--lr", "3e-5",
+        //     "--num_iterative_refinement", "10",
+        //     "--MPC_batch_size", "100",
+        //     "--num_MPC_batches", "10",
+        //     "--num_MPC_data_samples", "100",
+        //     "--numpoints", "10000",
+        //     "--time_till_refinement", "0.24"
+        // ]
+        "args": [
+        "--mode", "train",
+        "--experiment_class", "DeepReach",
+        "--dynamics_class", "QuadrotorReachAvoid",
+        "--experiment_name", "QuadraDebug",
+        "--minWith", "target",
+        "--pretrain",
+        "--pretrain_iters", "10000",
+        "--num_target_samples", "5000",
+        "--epochs_til_ckpt", "200"
+      ]
+
+
+        }
+    ]
+}

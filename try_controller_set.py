@@ -29,7 +29,7 @@ def get_args():
         "--mode", "test",
         "--experiment_class", "DeepReach",
         "--dynamics_class", "QuadrotorReachAvoid",
-        "--experiment_name", "QUADRA3",
+        "--experiment_name", "QUADRA6",
         "--minWith", "target",
         "--pretrain",
         "--pretrain_iters", "10000",
@@ -211,7 +211,7 @@ def plot_state(model, device, dynamics, dataslice: np.ndarray, time: float, x_ax
         plt.show()
         return values.detach().cpu().numpy()
 
-val = plot_state(model,orig_opt.device,dynamics_obj,np.array([1.,0,0,1,0.0,0.0,0.,1,0,0,0,0,0]),0.4,7,8,100,100)
+val = plot_state(model,orig_opt.device,dynamics_obj,np.array([1.,0,0,1,0.0,0.0,0.,1,0,0,0,0,0]),0.05,7,8,100,100)
 
 # verification
 
@@ -224,7 +224,7 @@ while value > 0:
 
     # Uniform sample within bounds
     state = low + (high - low) * torch.rand_like(low)
-    state = torch.tensor([1.,0,0,0.981,0.086,-0.015,0.173,0,0,0,1.8,0,0])
+    state = torch.tensor([1.,0,0,1,0.0,0.0,0.,1.8,1.4,0,.0,0,0])
     state = dynamics_obj.equivalent_wrapped_state(state)
     time = 0.4
     coord = torch.zeros(1, dynamics_obj.state_dim + 1)
@@ -233,13 +233,14 @@ while value > 0:
     with torch.no_grad():
         model_result = model({'coords': dynamics_obj.coord_to_input(coord.to(orig_opt.device))})
         value = dynamics_obj.io_to_value(model_result['model_in'].detach(), model_result['model_out'].squeeze(dim=-1).detach())
-    if value < 0: print(f'State {state} value {value}')
+    if bool(value < 0): print(f'State {state} value {value}')
 
 # simulation 
 dt = 0.001
 t_max = 0.4
 n_step = int(t_max/dt)
 traj = torch.zeros(n_step+1,dynamics_obj.state_dim)
+traj_u = torch.zeros(n_step,dynamics_obj.control_dim)
 traj[0] = state
 device = orig_opt.device
 time = 0
@@ -250,6 +251,7 @@ for i in range(n_step):
     traj_coord = model({'coords': dynamics_obj.coord_to_input(coord.to(device))})
     dvds = dynamics_obj.io_to_dv(traj_coord['model_in'], traj_coord['model_out'].squeeze(dim=-1)).detach()
     ctrl = dynamics_obj.optimal_control(coord[:, 1:].to(device), dvds[..., 1:].to(device))
+    traj_u[i] = ctrl
     traj[i+1] = dynamics_obj.rk4_step_quad(traj[i],ctrl,0,dt)
 
     reach_val = dynamics_obj.reach_fn(traj[i+1])
@@ -259,10 +261,13 @@ for i in range(n_step):
     time += dt
 
 traj_x = traj.detach().cpu().numpy()
+traj_u = traj_u.detach().cpu().numpy()
+
 import matplotlib.pyplot as plt
 
-labels = ['x','y','z','q_w','q_x','q_y','q_z','v_x','v_y','v_z','w_x','w_y','w_z']
-def plot_trajectory(traj):
+labels_x = ['x','y','z','q_w','q_x','q_y','q_z','v_x','v_y','v_z','w_x','w_y','w_z']
+labels_u = ['f_tot','alpha_x','alpha_y','alpha_z']
+def plot_x_trajectory(traj):
     """
     traj: (n, 13) tensor or numpy array
     """
@@ -275,7 +280,7 @@ def plot_trajectory(traj):
 
     for i in range(dim):
         axes[i].plot(time, traj[:, i])
-        axes[i].set_title(f"{labels[i]}")
+        axes[i].set_title(f"{labels_x[i]}")
         axes[i].set_xlabel("Time")
         axes[i].grid(True)
 
@@ -284,8 +289,28 @@ def plot_trajectory(traj):
         axes[i].axis("off")
 
     plt.tight_layout()
-    plt.show()
 
-plot_trajectory(traj_x)
+def plot_u_trajectory(traj):
+    """
+    traj: (n-1, 4) tensor or numpy array
+    """
+
+    n, dim = traj.shape
+    fig, axes = plt.subplots(1, 4, figsize=(14, 10))
+    axes = axes.flatten()
+
+    time = np.arange(n)*dt
+
+    for i in range(dim):
+        axes[i].plot(time, traj[:, i])
+        axes[i].set_title(f"{labels_u[i]}")
+        axes[i].set_xlabel("Time")
+        axes[i].grid(True)
+
+    plt.tight_layout()
+
+plot_x_trajectory(traj_x)
+plot_u_trajectory(traj_u)
+plt.show()
 
     

@@ -148,7 +148,7 @@ model = modules.SingleBVPNet(in_features=dynamics_obj.input_dim, out_features=1,
                              final_layer_factor=1., hidden_features=orig_opt.num_nl, num_hidden_layers=orig_opt.num_hl)
 model.to(orig_opt.device)
 
-checkpoint = experiment_dir + '/training/checkpoints/model_epoch_300000.pth'
+checkpoint = experiment_dir + '/training/checkpoints/model_epoch_700000.pth'
 
 model.load_state_dict(torch.load(checkpoint)['model'])
 
@@ -211,7 +211,7 @@ def plot_state(model, device, dynamics, dataslice: np.ndarray, time: float, x_ax
         plt.show()
         return values.detach().cpu().numpy()
 
-val = plot_state(model,orig_opt.device,dynamics_obj,np.array([1.,0,0,1,0.0,0.0,0.,1,0,0,0,0,0]),0.05,7,8,100,100)
+val = plot_state(model,orig_opt.device,dynamics_obj,np.array([1.,0,0,1,0.0,0.0,0.,1,0,0,0,0,0]),0.4,7,8,100,100)
 
 # verification
 
@@ -224,7 +224,7 @@ while value > 0:
 
     # Uniform sample within bounds
     state = low + (high - low) * torch.rand_like(low)
-    state = torch.tensor([1.,0,0,1,0.0,0.0,0.,1.8,1.4,0,.0,0,0])
+    state = torch.tensor([1.,0,0,1,0.0,0.0,0.,1.8,0,0,.0,0,0])
     state = dynamics_obj.equivalent_wrapped_state(state)
     time = 0.4
     coord = torch.zeros(1, dynamics_obj.state_dim + 1)

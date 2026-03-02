@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 dt = 0.005
-T_max = 0.05
+T_max = 0.5
 
 collective_thrust_max = 30.0
 # body_rate_acc_max = body_rate_acc_max
@@ -46,7 +46,7 @@ state_range = np.array(
             ],dtype=np.float64
         )
 
-x_0 = np.array([1.,0,0,1,0.0,0.0,0.,1,1,0,.0,0,0])
+x_0 = np.array([1.,0,0,1,0.0,0.0,0.,1.8,0,0,.0,0,0])
 N = int(T_max / dt)
 
 opti = Opti()

@@ -1318,10 +1318,10 @@ class QuadrotorReachAvoid(Dynamics):
         self.goal_vy = [-0.1, 0.1]
         self.goal_vz = [-0.1, 0.1]
 
-        self.goal_wx = [-0.05, 0.05]
-        self.goal_wy = [-0.05, 0.05]
-        self.goal_roll = [-0.05, 0.05]
-        self.goal_pitch = [-0.05, 0.05]
+        self.goal_wx = [-0.1, 0.1]
+        self.goal_wy = [-0.1, 0.1]
+        self.goal_roll = [-0.1, 0.1]
+        self.goal_pitch = [-0.1, 0.1]
 
         if set_mode=='reach_avoid':
             l_type='brat_hjivi'
@@ -1566,12 +1566,27 @@ class QuadrotorReachAvoid(Dynamics):
         # l = torch.stack([u_vx, u_vy, u_vz, u_qx, u_qy, l_qx,l_qy, l_vx, l_vy, l_vz], dim=-1)
         # l = torch.stack([u_vx, u_vy, u_vz, l_vx, l_vy, l_vz, u_wx,l_wx,u_wy,l_wy], dim=-1)
         # l = torch.stack([u_pitch, l_pitch,u_roll,l_roll,u_wx,u_wy,l_wx,l_wy,u_vx,l_vx, u_vy,l_vy,u_vz,l_vz], dim=-1)
+        # l = torch.stack(
+        #     [
+        #         u_pitch,
+        #         l_pitch,
+        #         u_roll,
+        #         l_roll,
+        #         u_vx,
+        #         l_vx,
+        #         u_vy,
+        #         l_vy,
+        #         u_vz,
+        #         l_vz,
+        #         u_wx,
+        #         l_wx,
+        #         u_wy,
+        #         l_wy,
+        #     ],
+        #     dim=-1,
+        # )
         l = torch.stack(
             [
-                u_pitch,
-                l_pitch,
-                u_roll,
-                l_roll,
                 u_vx,
                 l_vx,
                 u_vy,
@@ -1582,7 +1597,10 @@ class QuadrotorReachAvoid(Dynamics):
                 l_wx,
                 u_wy,
                 l_wy,
-            ],
+                u_pitch,
+                l_pitch,
+                u_roll,
+                l_roll],
             dim=-1,
         )
 

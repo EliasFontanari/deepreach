@@ -69,7 +69,7 @@ if (mode == 'all') or (mode == 'train'):
                    help='Defines the initial time for the curriculum training')
     p.add_argument('--counter_end', type=int, default=-1, required=False,
                    help='Defines the linear step for curriculum training starting from the initial time')
-    
+
 
     # model options
     p.add_argument('--deepReach_model', type=str, default='exact', required=False,
@@ -79,7 +79,7 @@ if (mode == 'all') or (mode == 'train'):
     p.add_argument('--finetune', action='store_true', default=False,
                    required=False, help='fine tune the last layer of pretrained model')
     p.add_argument('--num_hl', type=int, default=3,
-                   required=False, help='The number of hidden layers') # Don't recommand tuning this 
+                   required=False, help='The number of hidden layers') # Don't recommand tuning this
     p.add_argument('--num_nl', type=int, default=512,
                    required=False, help='Number of neurons per hidden layer.') # Don't recommand tuning this unless you want to use a smaller NN for simple problems
 
@@ -90,11 +90,11 @@ if (mode == 'all') or (mode == 'train'):
                    help='learning rate. default=2e-5')
     p.add_argument('--num_epochs', type=int, default=100000,
                    help='Number of epochs to train for.')
-    
-    
+
+
     # MPC loss options
     p.add_argument('--not_use_MPC', default=False, action='store_true',
-                   help='use MPC loss') 
+                   help='use MPC loss')
     p.add_argument('--not_refine_dataset', default=False, action='store_true',
                    help='refine MPC dataset') # whether we refine the MPC dataset every H_R seconds (see paper)
     p.add_argument('--MPC_finetune_lambda', type=float, default=100.0,
@@ -102,8 +102,8 @@ if (mode == 'all') or (mode == 'train'):
     p.add_argument('--num_MPC_data_samples', type=int, default=5000,
                    help='Number of MPC data samples used for training') # working fine but tunable.
     p.add_argument('--no_time_curr', default=False, action='store_true',
-                   help='use MPC loss with time curriculum') # Currently please always use --time_curr with --use_MPC 
-    # TODO: do a PDE weight curriculum if time_curr==False 
+                   help='use MPC loss with time curriculum') # Currently please always use --time_curr with --use_MPC
+    # TODO: do a PDE weight curriculum if time_curr==False
     p.add_argument('--MPC_importance_init', type=float, default=1.0,
                    help='importance of MPC loss at the beginning')
     p.add_argument('--MPC_importance_final', type=float, default=1.0,
@@ -126,14 +126,14 @@ if (mode == 'all') or (mode == 'train'):
     p.add_argument('--MPC_receding_horizon', type=int, default=-1,
                    help='MPC horizon') # -1 for direct style MPC and >0 (e.g., 2) for receding horizon MPC
     p.add_argument('--MPC_style', type=str, default='direct', required=False,
-                   choices=['direct', 'receding'], 
+                   choices=['direct', 'receding'],
                    help='directly perturbing the whole traj to get the value labels v.s. doing receding horizon rollouts') # most of the time direct is the better choice
     p.add_argument('--MPC_data_path', type=str, default='none', required=False,
                    help="MPC data path, where inputs.pt and value_labels.pt exist. Note that inputs.pt is normalized. Specify when using your own dataset")
-    
-    
-    
-    
+
+
+
+
     '''parameters that you probably don't need to pay attention'''
     # simulation data source options
     p.add_argument('--tMin', type=float, default=0.0,
@@ -150,7 +150,7 @@ if (mode == 'all') or (mode == 'train'):
                    choices=['mlp', 'rbf', 'pinn'], help='Whether to use uniform velocity parameter')
     p.add_argument('--resume_checkpoint', type=int, default=-1,
                    required=False, help='The number of hidden layers')
-    
+
 
     # training options
     p.add_argument('--steps_til_summary', type=int, default=100,
@@ -165,7 +165,7 @@ if (mode == 'all') or (mode == 'train'):
     p.add_argument('--dirichlet_loss_divisor', default=1.0, required=False,
                    type=float, help='What to divide the dirichlet loss by for loss reweighting')
 
-    
+
     # MPC options
     p.add_argument('--MPC_mode', type=str, default='MPC', required=False,
                    choices=['MPC', 'MPPI'], help='MPC or MPPI. Use MPPI only when you want the MPC data to be suboptimal and less noisy.')
@@ -173,9 +173,9 @@ if (mode == 'all') or (mode == 'train'):
                    choices=['gaussian', 'binary'], help='MPC additive perturbation distribution')
     p.add_argument('--MPC_lambda_', type=float, default=0.1,
                    help='MPPI lambda, which tunes the weighting strategy')
-    
-    
-    
+
+
+
     p.add_argument('--MPC_loss_type', type=str, default='l1', required=False,
                    choices=['l1', 'l2'], help='using l1 or l2 norm for MPC loss')
     p.add_argument('--aug_with_MPC_data', type=int, default=0,
@@ -192,13 +192,13 @@ if (mode == 'all') or (mode == 'train'):
                    help='z-axis resolution of validation plot during training')
     p.add_argument('--val_time_resolution', type=int, default=6,
                    help='time-axis resolution of validation plot during training')
-    
+
     # loss options
     p.add_argument('--minWith', type=str, required=False, default= 'target', choices=[
                    'none', 'zero', 'target'], help='BRS vs BRT computation (typically should be using target for BRT)')
     # min with none will yield BRS, while min with zero/target corresponding to HJB-PDE and HJB-VI for computing BRT.
     # Typically min with target works better than min with zero
-    
+
 
     # load dynamics_class choices dynamically from dynamics module
     dynamics_classes_dict = {name: clss for name, clss in inspect.getmembers(
@@ -229,7 +229,7 @@ if (mode == 'all') or (mode == 'test'):
                    help='The number of violations to sample for in scenario optimization for testing')
     p.add_argument('--control_type', type=str, default='value', choices=[
                    'value', 'ttr', 'init_ttr'], help='The controller to use in scenario optimization for testing')
-    p.add_argument('--data_step', type=str, default='run_basic_recovery', choices=['plot_ND', 'run_basic_recovery', 
+    p.add_argument('--data_step', type=str, default='run_basic_recovery', choices=['plot_ND', 'run_basic_recovery',
                 'plot_basic_recovery', 'run_robust_recovery', 'plot_robust_recovery', 'eval_w_gt'], help='The data processing step to run')
     p.add_argument('--gt_data_path', type=str, default='none', help='Folder for gt data where coords.pt and gt_values.pt exist')
 
@@ -251,7 +251,7 @@ if (mode == 'train') and (opt.resume_checkpoint > 0):
     opt.num_epochs -= opt.resume_checkpoint
 
 dynamics.set_model(opt.deepReach_model)
-if mode=='test': 
+if mode=='test':
     opt.not_use_MPC=True
     opt.no_time_curr=True
 
@@ -262,37 +262,40 @@ dataset = dataio.ReachabilityDataset(
     tMin=opt.tMin, tMax=opt.tMax,
     counter_start=opt.counter_start, counter_end=opt.counter_end,
     num_src_samples=opt.num_src_samples, num_target_samples=opt.num_target_samples,
-    use_MPC = (not opt.not_use_MPC), time_curr=(not opt.no_time_curr),
+    use_MPC = False, time_curr=(not opt.no_time_curr),
     MPC_data_path = opt.MPC_data_path, num_MPC_perturbation_samples = opt.num_MPC_perturbation_samples, MPC_dt = opt.MPC_dt,
-    MPC_mode = opt.MPC_mode, MPC_sample_mode = opt.MPC_sample_mode, MPC_style= opt.MPC_style, 
-    MPC_lambda_ = opt.MPC_lambda_, MPC_batch_size = opt.MPC_batch_size, MPC_receding_horizon= opt.MPC_receding_horizon, 
+    MPC_mode = opt.MPC_mode, MPC_sample_mode = opt.MPC_sample_mode, MPC_style= opt.MPC_style,
+    MPC_lambda_ = opt.MPC_lambda_, MPC_batch_size = opt.MPC_batch_size, MPC_receding_horizon= opt.MPC_receding_horizon,
     num_MPC_data_samples = opt.num_MPC_data_samples, num_iterative_refinement=opt.num_iterative_refinement,
-    time_till_refinement=opt.time_till_refinement,num_MPC_batches=opt.num_MPC_batches, 
+    time_till_refinement=opt.time_till_refinement,num_MPC_batches=opt.num_MPC_batches,
     aug_with_MPC_data= opt.aug_with_MPC_data, policy=None, refine_dataset=(not opt.not_refine_dataset))
 # mpc_module = MPC.MPC(horizon=None, receding_horizon=opt.MPC_receding_horizon, dT=opt.MPC_dt, num_samples=opt.num_MPC_perturbation_samples,
 #                            dynamics_=opt.dynamics, device='cuda', mode=opt.MPC_mode,
 #                            sample_mode=opt.MPC_sample_mode, lambda_=opt.MPC_lambda_, style=opt.MPC_style, num_iterative_refinement=opt.num_iterative_refinement)
 
+print(f'MPC TEST')
 init_states = dataset.sample_init_state()
 costs, MPC_traj = dataset.get_MPC_traj(opt.tMax,0)
 
 print(f'Shape of MPC traj {MPC_traj.shape}')
 # print(f'RPY: {dataset.dynamics.quat_to_rpy_torch(MPC_traj)}')
 
-avoid_costs = dataset.dynamics.avoid_fn(MPC_traj)
-reach_costs = dataset.dynamics.reach_fn(MPC_traj)
+# avoid_costs = dataset.dynamics.avoid_fn(MPC_traj)
+# reach_costs = dataset.dynamics.reach_fn(MPC_traj)
 
-print(f'trajectory 0 : avoid_costs = {-avoid_costs[0]}')
-print(f'trajectory 0 : reach_costs = {reach_costs[0]}')
+# print(f'trajectory 0 : avoid_costs = {-avoid_costs[0]}')
+# print(f'trajectory 0 : reach_costs = {reach_costs[0]}')
 
 
 MPC_traj = MPC_traj.cpu().numpy()
 costs = costs.cpu().numpy()
 
 
-index_to_plot = np.argsort(costs)[:100]
+index_to_plot = np.argsort(costs)
 
 print(f'Minimum costs {costs[index_to_plot]}')
+
+print(f'Reach percentage: {100*np.sum(costs<0)/costs.shape[0]} /%')
 
 import matplotlib.pyplot as plt
 labels = ['x','y','z','qw','qx','qy','qz','vx','vy','vz','wx','wy','wz']
@@ -307,7 +310,7 @@ for i in range(13):
 
     # Plot each state in its own subplot
     for state_idx in range(num_states):
-        axes[state_idx].plot(np.arange(0,MPC_traj.shape[1])*opt.MPC_dt,MPC_traj[index_to_plot[i], :, state_idx], 
+        axes[state_idx].plot(np.arange(0,MPC_traj.shape[1])*opt.MPC_dt,MPC_traj[index_to_plot[i], :, state_idx],
                             color=f'C{state_idx}', linewidth=2)
         axes[state_idx].set_title(f'State {labels[state_idx]}', fontsize=10)
         axes[state_idx].grid(True, alpha=0.3)

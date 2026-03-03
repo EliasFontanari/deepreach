@@ -632,12 +632,59 @@ class Quadrotor(Dynamics):
             return torch.maximum(self.reach_fn(state), -self.avoid_fn(state))
 
 
+    # def sample_target_state(self, num_samples):
+    #     target_state_range = self.state_test_range()
+    #     x = torch.FloatTensor(num_samples).uniform_(-0.299,0.299)
+    #     # print(f'x = {x}')
+    #     y_bound = torch.sqrt(0.299**2 - x**2)
+    #     y = torch.FloatTensor(num_samples).uniform_(-1, 1) * y_bound
+    #     # print(f'y = {y}')
+    #     target_state_range = torch.tensor(target_state_range)
+    #     sample = target_state_range[:, 0] + torch.rand(num_samples, self.state_dim)*(target_state_range[:, 1] - target_state_range[:, 0])
+    #     sample[...,0] = x
+    #     sample[...,1] = y
+
+    #     sample = self.equivalent_wrapped_state(sample)
+
+    #     # print(f'Sample in reach set? {self.reach_fn(sample) < 0} norm x-y = {torch.norm(sample[..., :2], dim = -1)}')
+
+    #     return sample
+
     def sample_target_state(self, num_samples):
-        target_state_range = self.state_test_range()
-        target_state_range[0] = [-1, 1]
-        target_state_range[1] = [-0.25, 0.25]
-        target_state_range = torch.tensor(target_state_range)
-        return target_state_range[:, 0] + torch.rand(num_samples, self.state_dim)*(target_state_range[:, 1] - target_state_range[:, 0])
+        R = 0.3
+        target_state_range = torch.tensor(self.state_test_range())
+
+        # --- Uniform sampling in a disk ---
+        theta = 2 * torch.pi * torch.rand(num_samples)
+        r = R * torch.sqrt(torch.rand(num_samples))
+
+        x = r * torch.cos(theta)
+        y = r * torch.sin(theta)
+
+        # --- Sample full state normally ---
+        sample = target_state_range[:, 0] + torch.rand(num_samples, self.state_dim) * (
+            target_state_range[:, 1] - target_state_range[:, 0]
+        )
+
+        # --- Replace first two dims with disk samples ---
+        sample[:, 0] = x
+        sample[:, 1] = y
+
+        sample = self.equivalent_wrapped_state(sample)
+
+        return sample
+
+    # def sample_target_state(self, num_samples):
+    #     target_state_range = self.state_test_range()
+    #     target_state_range[0] = [-1, 1]
+    #     target_state_range[1] = [-0.25, 0.25]
+    #     target_state_range = torch.tensor(target_state_range)
+    #     sample = target_state_range[:, 0] + torch.rand(num_samples, self.state_dim)*(target_state_range[:, 1] - target_state_range[:, 0])
+
+    #     print(f'Sample in reach set? {self.reach_fn(sample) < 0} norm x-y = {torch.norm(sample[..., :2], dim = -1)}')
+
+    #     return sample
+
 
     def cost_fn(self, state_traj):
         if self.set_mode=='avoid':

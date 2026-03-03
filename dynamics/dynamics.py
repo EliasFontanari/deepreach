@@ -675,6 +675,32 @@ class Quadrotor(Dynamics):
         sample = self.equivalent_wrapped_state(sample)
 
         return sample
+    
+
+    def rk4_step_quad(self, state, control, disturbance, dt):
+        """
+        Integrate dynamics one step using RK4.
+        Args:
+            state:      torch.Tensor (..., 13)
+            control:    torch.Tensor (..., 4)
+            disturbance: torch.Tensor (..., ?)
+            dt:         float, time step
+        Returns:
+            next_state: torch.Tensor (..., 13)
+        """
+        k1 = self.dsdt(state,              control, disturbance)
+        k2 = self.dsdt(state + dt/2 * k1,  control, disturbance)
+        k3 = self.dsdt(state + dt/2 * k2,  control, disturbance)
+        k4 = self.dsdt(state + dt    * k3, control, disturbance)
+
+        next_state = state + dt / 6.0 * (k1 + 2*k2 + 2*k3 + k4)
+
+        # Re-normalize quaternion
+        next_state[..., 3:7] = next_state[..., 3:7] / torch.norm(
+            next_state[..., 3:7], dim=-1, keepdim=True
+        )
+
+        return next_state
 
     # def sample_target_state(self, num_samples):
     #     target_state_range = self.state_test_range()
@@ -1367,10 +1393,10 @@ class QuadrotorReachAvoid(Dynamics):
         self.goal_vy = [-0.1, 0.1]
         self.goal_vz = [-0.1, 0.1]
 
-        self.goal_wx = [-0.1, 0.1]
-        self.goal_wy = [-0.1, 0.1]
-        self.goal_roll = [-0.1, 0.1]
-        self.goal_pitch = [-0.1, 0.1]
+        self.goal_wx = [-0.05, 0.05]
+        self.goal_wy = [-0.05, 0.05]
+        self.goal_roll = [-0.05, 0.05]
+        self.goal_pitch = [-0.05, 0.05]
 
         if set_mode=='reach_avoid':
             l_type='brat_hjivi'
@@ -1656,20 +1682,12 @@ class QuadrotorReachAvoid(Dynamics):
         return torch.max(l, dim=-1)[0]
 
     def avoid_fn(self, state):
-        device = state.device.type
-        if "cuda" in device:
-            g_l = state[..., 0:3] - self.state_range_[0:3, 0]
-            u_l = self.state_range_[0:3, 1] - state[..., 0:3]
-        else:
-            g_l = state[..., 0:3] - self.state_range_[0:3, 0].cpu()
-            u_l = self.state_range_[0:3, 1].cpu() - state[..., 0:3]
-        # Stack both, then find global maximum across all dimensions
-        combined = torch.stack([g_l, u_l], dim=-1)  # Shape: (batch, state_dim, 2)
-        min_g = (
-            combined.min(dim=-1).values.min(dim=-1).values
-        )  # Max over both state_dim and the 2 tensors
-
-        return min_g
+        state_range = self.state_range_[0:3].to(state.device)
+        g_l = state[..., 0:3] - state_range[:, 0]
+        u_l = state_range[:, 1] - state[..., 0:3]
+        
+        combined = torch.stack([g_l, u_l], dim=-1)
+        return combined.min(dim=-1).values.min(dim=-1).values
 
     def boundary_fn(self, state):
         if self.set_mode=='avoid':

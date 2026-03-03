@@ -243,7 +243,7 @@ traj = torch.zeros(n_step+1,dynamics_obj.state_dim)
 traj_u = torch.zeros(n_step,dynamics_obj.control_dim)
 traj[0] = state
 device = orig_opt.device
-time = 0
+time = t_max
 for i in range(n_step):
     coord = torch.zeros(1,dynamics_obj.state_dim+1)
     coord[0] = time
@@ -258,7 +258,7 @@ for i in range(n_step):
     if bool(reach_val < 0):
         print(f'Reached at time step {i} state{traj[i+1]}')
 
-    time += dt
+    time -= dt
 
 traj_x = traj.detach().cpu().numpy()
 traj_u = traj_u.detach().cpu().numpy()

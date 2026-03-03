@@ -107,7 +107,7 @@ class ReachabilityDataset(Dataset):
             MPC_states_ = torch.zeros(
                 self.MPC_batch_size, self.dynamics.state_dim).uniform_(-1, 1)
 
-            if self.dynamics.name == "Quadrotor":
+            if "Quadrotor" in self.dynamics.name:
                 MPC_states_ = self.dynamics.normalize_q(MPC_states_)
             MPC_states = torch.cat(
                 (MPC_states, self.dynamics.clamp_state_input(MPC_states_)), dim=0)
@@ -199,6 +199,9 @@ class ReachabilityDataset(Dataset):
                            sample_mode=self.MPC_sample_mode, lambda_=self.MPC_lambda_, style=self.MPC_style, num_iterative_refinement=self.num_iterative_refinement)
         device = 'cuda'
         MPC_states = self.sample_init_state()
+        
+        # state_test = torch.tensor([0,0,0,1,0,0,0,0.2,0,0,0,0,0])
+        # MPC_states[:] = state_test.to(MPC_states.device)
         
         costs, traj, MPC_inputs, MPC_values = self.mpc.get_batch_data(
             MPC_states.cuda(), T, self.policy, t=t)  # Make sure to generate at least one batch of data at T, so we have "look-ahead" MPC labels for deepreach

@@ -1691,7 +1691,7 @@ class QuadrotorReachAvoid(Dynamics):
 
     def boundary_fn(self, state):
         if self.set_mode=='avoid':
-            raise NotImplementedError
+            return self.avoid_fn(state)
         elif self.set_mode=='reach_avoid':
             return torch.maximum(self.reach_fn(state), -self.avoid_fn(state))
         elif self.set_mode=='reach':

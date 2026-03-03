@@ -628,6 +628,8 @@ class Quadrotor(Dynamics):
     def boundary_fn(self, state):
         if self.set_mode=='avoid':
             return self.dist_to_cylinder(state,0.0,0.0)
+        elif self.set_mode=='reach':
+            return self.reach_fn(state)
         else:
             return torch.maximum(self.reach_fn(state), -self.avoid_fn(state))
 

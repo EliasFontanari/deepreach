@@ -1820,7 +1820,31 @@ class QuadrotorReachAvoid(Dynamics):
 
     def optimal_disturbance(self, state, dvds):
         return torch.zeros(1)
+    
+    def rk4_step_quad(self, state, control, disturbance, dt):
+        """
+        Integrate dynamics one step using RK4.
+        Args:
+            state:      torch.Tensor (..., 13)
+            control:    torch.Tensor (..., 4)
+            disturbance: torch.Tensor (..., ?)
+            dt:         float, time step
+        Returns:
+            next_state: torch.Tensor (..., 13)
+        """
+        k1 = self.dsdt(state,              control, disturbance)
+        k2 = self.dsdt(state + dt/2 * k1,  control, disturbance)
+        k3 = self.dsdt(state + dt/2 * k2,  control, disturbance)
+        k4 = self.dsdt(state + dt    * k3, control, disturbance)
 
+        next_state = state + dt / 6.0 * (k1 + 2*k2 + 2*k3 + k4)
+
+        # Re-normalize quaternion
+        next_state[..., 3:7] = next_state[..., 3:7] / torch.norm(
+            next_state[..., 3:7], dim=-1, keepdim=True
+        )
+
+        return next_state
 
     def plot_config(self):
         return {

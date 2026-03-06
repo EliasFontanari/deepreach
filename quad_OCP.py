@@ -46,7 +46,7 @@ state_range = np.array(
             ],dtype=np.float64
         )
 
-x_0 = np.array([0.,0,0,1,0.0,0.0,0.,0.9,0.6,0,.0,0,0])
+x_0 = np.array([0.,0,0,1,0.0,0.0,0.,-1.1,0.,0,.0,0,0])
 N = int(T_max / dt)
 
 opti = Opti()

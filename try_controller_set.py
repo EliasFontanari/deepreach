@@ -29,7 +29,7 @@ def get_args():
         "--mode", "test",
         "--experiment_class", "DeepReach",
         "--dynamics_class", "QuadrotorReachAvoid",
-        "--experiment_name", "ReachAvoid",
+        "--experiment_name", "QUADRA6",
         "--minWith", "target",
         "--pretrain",
         "--pretrain_iters", "10000",
@@ -213,7 +213,7 @@ def plot_state(model, device, dynamics, dataslice: np.ndarray, time: float, x_ax
         plt.show()
         return values.detach().cpu().numpy()
 
-val = plot_state(model,'cuda',dynamics_obj,np.array([0,  0,  0,  1., 0,  0, 0, 0, 0, 0, 0, 0, 0]),0.5,7,8,100,100)
+val = plot_state(model,'cuda',dynamics_obj,np.array([0,  0,  0,  1., 0,  0, 0, 0, 0, 0, 0, 0, 0]),0.4,7,8,100,100)
 
 # verification
 
@@ -237,8 +237,8 @@ while value > 0:
         value = dynamics_obj.io_to_value(model_result['model_in'].detach(), model_result['model_out'].squeeze(dim=-1).detach())
     if bool(value < 0): print(f'State {state} value {value}')
 
-# state =  torch.tensor([1.,0,0,1,0.0,0.0,0.,-0.5,0,0,0,0,0])
-time = 0.5
+state =  torch.tensor([1.,0,0,1,0.0,0.0,0.,0,0,0,0,0,0])
+time = 0.4
 # coord = torch.zeros(1, dynamics_obj.state_dim + 1)
 # coord[0,0] = time
 # coord[0,1:] = state

@@ -200,7 +200,7 @@ class ReachabilityDataset(Dataset):
         device = 'cuda'
         MPC_states = self.sample_init_state()
         
-        # state_test = torch.tensor([0,0,0,1,0,0,0,0.2,0,0,0,0,0])
+        # state_test = torch.tensor([3.3,3.6,0,1,0,0,0,0.,0,0,0,0,0])
         # MPC_states[:] = state_test.to(MPC_states.device)
         
         costs, traj, MPC_inputs, MPC_values = self.mpc.get_batch_data(

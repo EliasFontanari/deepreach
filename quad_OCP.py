@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 dt = 0.005
-T_max = 0.5
+T_max = 2.0
 
 collective_thrust_max = 30.0
 # body_rate_acc_max = body_rate_acc_max
@@ -17,9 +17,9 @@ dwx_max = 8.0
 dwy_max = 8.0
 dwz_max = 4.0
 
-goal_vx = [-0.1, 0.1]
-goal_vy = [-0.1, 0.1]
-goal_vz = [-0.1, 0.1]
+goal_vx = [-0.05, 0.05]
+goal_vy = [-0.05, 0.05]
+goal_vz = [-0.05, 0.05]
 
 goal_wx = [-0.05, 0.05]
 goal_wy = [-0.05, 0.05]
@@ -46,7 +46,7 @@ state_range = np.array(
             ],dtype=np.float64
         )
 
-x_0 = np.array([0.,0,0,1,0.0,0.0,0.,-1.1,0.,0,.0,0,0])
+x_0 = np.array([0.,0,0,  0.892,0.239,-0.099,0.370,2.,0,-0.0,.0,0,0])
 N = int(T_max / dt)
 
 opti = Opti()
@@ -159,7 +159,7 @@ opti.subject_to(opti.bounded(goal_roll[0],rpy[0],goal_roll[1]))
 opti.subject_to(opti.bounded(goal_pitch[0],rpy[1],goal_pitch[1]))
 
 # ---- objective          ---------
-opti.minimize(1)  # just respect constraint
+opti.minimize(cost)  # just respect constraint
 
 # ---- solve NLP              ------
 # opti.solver("ipopt") # set numerical backend
@@ -227,4 +227,108 @@ def plot_u_trajectory(traj):
 
 plot_x_trajectory(traj_x)
 plot_u_trajectory(traj_u)
+
+# try to apply same commands to scaled initial velocity
+
+x=MX.sym('x',13)
+u=MX.sym('u',4)
+dt_step = MX.sym('dt_step',1)
+
+k1 = f(x,         u)
+k2 = f(x+dt_step/2*k1, u)
+k3 = f(x+dt_step/2*k2, u)
+k4 = f(x+dt_step*k3,   u)
+x_next = x + dt_step/6*(k1+2*k2+2*k3+k4) 
+
+f_rk4 = Function('rk4_step',[x,u,dt_step],[x_next])
+
+
+# integrated trajectory
+alpha=0.6
+x0_scaled = x_0
+x0_scaled[7:10] *= alpha 
+x_int = np.zeros(traj_x.shape)
+x_int[:,0] = x0_scaled
+u_seq = np.zeros(traj_u.shape)
+for i in range(traj_u.shape[1]):
+    u_scaled =np.copy(traj_u[:,i])
+    u_scaled[0] *= alpha
+    x_int[:,i+1] = np.array(f_rk4(x_int[:,i],u_scaled,dt)).squeeze()
+    u_seq[:,i]= np.array(u_scaled).squeeze()
+
+# print(np.array(x_int).squeeze())
+plot_x_trajectory(x_int)
+plot_u_trajectory(u_seq)
+# plt.show()
+
+from scipy.spatial.transform import Rotation as ROT
+
+
+def colored_3d_trajectory(ax, x, y, z,quat, cmap="plasma", lw=2, step=20, arrow_len = 0.10):
+    """Plot a 3D trajectory with color scaled by time (index along path)."""
+    t = np.arange(traj_x.shape[1])*dt
+    norm = plt.Normalize(0, 1)
+    colors = plt.get_cmap(cmap)(norm(t[:-1]))
+
+    # Build and draw one segment per consecutive point pair
+    points = np.array([x, y, z]).T
+    for i, col in enumerate(colors):
+        ax.plot(points[i:i+2, 0], points[i:i+2, 1], points[i:i+2, 2],
+                color=col, linewidth=lw, solid_capstyle="round")
+        
+    # --- pose arrows ---
+    for i in np.arange(0, len(x), step):
+        pos = np.array([x[i], y[i], z[i]])
+        quat_ = np.hstack([quat[1:,i],quat[0,i]])
+        R = ROT.from_quat(quat_).as_matrix()
+        for col, axis_idx in zip(["red", "green", "blue"], [0, 1, 2]):
+            d = R[:, axis_idx] * arrow_len
+            ax.quiver(pos[0], pos[1], pos[2],
+                      d[0], d[1], d[2],
+                      color=col, linewidth=1.2, arrow_length_ratio=0.3)
+    
+    # --- unitary aspect ratio ---
+    all_pts = np.array([x, y, z])
+    max_range = (all_pts.max(axis=1) - all_pts.min(axis=1)).max() / 2
+    mid = all_pts.mean(axis=1)
+    ax.set_xlim(mid[0] - max_range, mid[0] + max_range)
+    ax.set_ylim(mid[1] - max_range, mid[1] + max_range)
+    ax.set_zlim(mid[2] - max_range, mid[2] + max_range)
+    ax.set_box_aspect([1, 1, 1])
+
+    return norm, cmap
+
+def add_colorbar(fig, ax, norm, cmap):
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax, pad=0.12, shrink=0.6, aspect=20)
+    cbar.set_label("Time", fontsize=9)
+    cbar.set_ticks([0, 0.5, 1])
+    cbar.set_ticklabels(["Start", "Mid", "End"])
+    cbar.ax.tick_params(labelsize=8)
+
+fig = plt.figure()
+fig.suptitle("3D Trajectories — color encodes time", fontsize=13, fontweight="bold")
+
+ax1 = fig.add_subplot(111, projection="3d")
+
+x1, y1, z1, quat1 = traj_x[0,:], traj_x[1,:], traj_x[2,:], traj_x[3:7,:]
+norm1, cmap1 = colored_3d_trajectory(ax1, x1, y1, z1,quat1, cmap="turbo")
+
+ax1.set_title("Original traj", fontsize=11)
+ax1.set_xlabel("X"); ax1.set_ylabel("Y"); ax1.set_zlabel("Z")
+ax1.legend(fontsize=8, loc="upper left")
+ax1.view_init(elev=25, azim=45)
+
+x2, y2, z2, quat2 = x_int[0,:], x_int[1,:], x_int[2,:], x_int[3:7,:]
+norm2, cmap2 = colored_3d_trajectory(ax1, x2, y2, z2, quat2, cmap="cool")
+
+ax1.set_title("Scaled control trajectory", fontsize=11)
+ax1.set_xlabel("X"); ax1.set_ylabel("Y"); ax1.set_zlabel("Z")
+ax1.legend(fontsize=8, loc="upper left")
+ax1.view_init(elev=25, azim=45)
+# add_colorbar(fig, ax2, norm2, cmap2)
+
+plt.tight_layout()
+plt.savefig("3d_trajectories.png", dpi=150, bbox_inches="tight")
 plt.show()

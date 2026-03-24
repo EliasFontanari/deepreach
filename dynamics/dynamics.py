@@ -325,7 +325,7 @@ class VertDrone2D(Dynamics):
             'y_axis_idx': 1,
             'z_axis_idx': -1, # because there is only 2D
         }
-    
+
 class VertDroneReachAvoid2D(Dynamics):
     def __init__(self):
         self.gravity = 9.8                             # g
@@ -1011,7 +1011,6 @@ class Quadrotor(Dynamics):
         }
 
 
-
 class F1tenth(Dynamics):
     def __init__(self):
         # variable for dynamics
@@ -1547,7 +1546,7 @@ class QuadrotorReachAvoid(Dynamics):
                 [-self.dwx_max, self.dwx_max],
                 [-self.dwy_max, self.dwy_max],
                 [-self.dwz_max, self.dwz_max]]).cuda()
-        self.eps_var=torch.tensor([20,8,8,4]).cuda()
+        self.eps_var=torch.tensor([self.collective_thrust_max ,8,8,4]).cuda()
         self.control_init= torch.tensor([-self.Gz*0.0,0,0,0]).cuda()
 
         state_mean_=(self.state_range_[:,0]+self.state_range_[:,1])/2.0
@@ -2024,7 +2023,7 @@ class QuadrotorReachAvoid(Dynamics):
             'y_axis_idx': 8,
             'z_axis_idx': 0,
         }
-    
+
 class QuadrotorReachAvoidTunnel(Dynamics):
     def __init__(self,  set_mode: str):  # simpler quadrotor
         self.collective_thrust_max = 30.
@@ -2070,8 +2069,8 @@ class QuadrotorReachAvoidTunnel(Dynamics):
         state_mean_=(self.state_range_[:,0]+self.state_range_[:,1])/2.0
         state_var_=(self.state_range_[:,1]-self.state_range_[:,0])/2.0
 
-        self.sphere_goal_R = 0.2
-        self.target_pos = torch.tensor([3.6,3.6,0])
+        self.sphere_goal_R = 0.3
+        self.target_pos = torch.tensor([2.0,-2.0,0])
 
         self.corridor_width_x = 0.5
         self.corridor_width_y = 8
@@ -2082,7 +2081,8 @@ class QuadrotorReachAvoidTunnel(Dynamics):
 
         self.goal_roll = [-0.785, 0.785]
         self.goal_pitch = [-0.785, 0.785]
-
+        self.goal_wx = [-0.785, 0.785]
+        self.goal_wy = [-0.785, 0.785]
 
         if set_mode=='reach_avoid':
             l_type='brat_hjivi'
@@ -2103,7 +2103,7 @@ class QuadrotorReachAvoidTunnel(Dynamics):
         print(f'Mean and var {mean}, {std}')
         self.value_mean = mean
         self.value_var = std
-    
+
     def sample_quaternion_small_roll_pitch(
         self,
         roll_range=(-0.1, 0.1),
@@ -2131,12 +2131,14 @@ class QuadrotorReachAvoidTunnel(Dynamics):
         if n_samples == 1:
             return quats[0]
         return quats
-    
+
     def sample_target_state(self, num_samples):
         target_state_range = self.state_test_range()
-        target_state_range[7] = [self.goal_vx[0], self.goal_vx[1]]  # y in [-20, 20]
-        target_state_range[8] = [self.goal_vy[0], self.goal_vy[1]]  # z in [10, 20]
-        target_state_range[9] = [self.goal_vz[0], self.goal_vz[1]]  # z in [10, 20]
+        target_state_range[7] = [self.goal_vx[0], self.goal_vx[1]] 
+        target_state_range[8] = [self.goal_vy[0], self.goal_vy[1]]  
+        target_state_range[9] = [self.goal_vz[0], self.goal_vz[1]]  
+        target_state_range[10] = [self.goal_wx[0], self.goal_wx[1]]  
+        target_state_range[11] = [self.goal_wy[0], self.goal_wy[1]]  
 
         target_state_range = torch.tensor(target_state_range)
         target_state_range = target_state_range[:, 0] + torch.rand(
@@ -2170,10 +2172,10 @@ class QuadrotorReachAvoidTunnel(Dynamics):
         directions = torch.randn(num_samples, 3)
         directions /= torch.linalg.norm(directions, axis=1,keepdim=True)
         r = torch.rand(num_samples, 1) ** (1/3) * self.sphere_goal_R
-        target_state_range[..., :3] = r * directions
+        target_state_range[..., :3] = r * directions + self.target_pos.to(target_state_range.device)
 
         return target_state_range
-    
+
     def normalize_q(self, x):
         # normalize quaternion
         normalized_x = x*1.0
@@ -2240,11 +2242,11 @@ class QuadrotorReachAvoidTunnel(Dynamics):
         dsdt[..., 12] = (control[..., 3]) * 1.0
 
         return dsdt
-    
+
     def quat_to_rpy(self,quat):
         quat = np.array(np.hstack([quat[1:],quat[0]]))
         return ROT.from_quat(quat,scalar_first=True).as_euler("XYZ")
-    
+
     def quat_to_rpy_torch(self,quat):
         """
         Convert quaternion to roll-pitch-yaw (RPY) Euler angles.
@@ -2258,32 +2260,47 @@ class QuadrotorReachAvoidTunnel(Dynamics):
         """
         # Normalize quaternion to unit length
         quat = quat / torch.norm(quat, dim=-1, keepdim=True)
-        
+
         # Extract quaternion components [w, x, y, z]
         w, x, y, z = quat[..., 0], quat[..., 1], quat[..., 2], quat[..., 3]
-        
+
         # Convert to Euler angles (ZYX convention)
         # Roll (rotation around X-axis) - applied last
         sinr_cosp = 2 * (w * x - y * z)
         cosr_cosp = 1 - 2 * (x * x + y * y)
         roll = torch.atan2(sinr_cosp, cosr_cosp)
-        
+
         # Pitch (rotation around Y-axis) - applied second
         sinp = 2 * (w * y + z * x)
         sinp = torch.clamp(sinp, -1.0, 1.0)
         pitch = torch.asin(sinp)
-        
+
         # Yaw (rotation around Z-axis) - applied first
         siny_cosp = 2 * (w * z - x * y)
         cosy_cosp = 1 - 2 * (y * y + z * z)
         yaw = torch.atan2(siny_cosp, cosy_cosp)
-        
+
         return torch.stack([roll, pitch, yaw], dim=-1)
-    
-    def wall_fn(self,state_xyz):
-        return state_xyz[...,2] - (10*torch.exp(-(((state_xyz[...,0])/(self.corridor_width_x/2))**100 + ((state_xyz[...,1]-0.8)/(self.corridor_width_y/2))**100))**10 - 5)
+
+    def wall_fn(self, state_xyz):
+        return state_xyz[..., 2] - (
+            10
+            * torch.exp(
+                -(
+                    (
+                        ((state_xyz[..., 0]) / (self.corridor_width_x / 2)) ** 10
+                        + ((state_xyz[..., 1] - 0.8) / (self.corridor_width_y / 2))
+                        ** 10
+                    )
+                    ** 4
+                )
+            )
+            - 4
+        )
 
     def reach_fn(self, state):
+        if state.dim() == 1:
+            state = state.unsqueeze(0)  
         upper_x = torch.tensor([self.goal_vx[1]], device=state.device)
         lower_x = torch.tensor([self.goal_vx[0]], device=state.device)
         upper_y = torch.tensor([self.goal_vy[1]], device=state.device)
@@ -2297,7 +2314,7 @@ class QuadrotorReachAvoidTunnel(Dynamics):
         l_vy = lower_y - state[..., 8]
         u_vz = state[..., 9] - upper_z
         l_vz = lower_z - state[..., 9]
-        
+
         upper_pitch = torch.tensor([self.goal_pitch[1]], device=state.device)
         lower_pitch = torch.tensor([self.goal_pitch[0]], device=state.device)
         upper_roll = torch.tensor([self.goal_roll[1]], device=state.device)
@@ -2312,6 +2329,18 @@ class QuadrotorReachAvoidTunnel(Dynamics):
         u_roll = roll - upper_roll
         l_roll = lower_roll - roll
 
+        upper_wx = torch.tensor([self.goal_wx[1]], device=state.device)
+        lower_wx = torch.tensor([self.goal_wx[0]], device=state.device)
+        upper_wy = torch.tensor([self.goal_wy[1]], device=state.device)
+        lower_wy = torch.tensor([self.goal_wy[0]], device=state.device)
+
+        wx = state[...,10]
+        wy = state[...,11]
+        u_wx = wx - upper_wx
+        l_wx = lower_wx - wx
+        u_wy = wy - upper_wy
+        l_wy = lower_wy - wy
+
         sphere_target = (torch.norm(state[..., :3] - self.target_pos.to(state.device), dim=-1)-self.sphere_goal_R)
         l = torch.stack(
             [
@@ -2321,10 +2350,10 @@ class QuadrotorReachAvoidTunnel(Dynamics):
                 l_vy,
                 u_vz,
                 l_vz,
-                u_pitch,
-                l_pitch,
-                u_roll,
-                l_roll,
+                u_wx,
+                l_wx,
+                u_wy,
+                l_wy,
                 sphere_target],
             dim=-1,
         )
@@ -2335,16 +2364,42 @@ class QuadrotorReachAvoidTunnel(Dynamics):
         state_range = self.state_range_[0:3].to(state.device)
         g_l = state[..., 0:3] - state_range[:, 0]
         u_l = state_range[:, 1] - state[..., 0:3]
-        
+
         wall_c = self.wall_fn(state[...,:3])
-        combined = torch.cat([g_l, u_l, wall_c.unsqueeze(-1)], dim=-1)
+        combined = torch.cat([g_l, u_l,wall_c.unsqueeze(-1)], dim=-1)
+        # combined = torch.cat([g_l, u_l], dim=-1)
+
         return combined.min(dim=-1).values
 
     def boundary_fn(self, state):
         if self.set_mode=='avoid':
             return self.avoid_fn(state)
         elif self.set_mode=='reach_avoid':
-            return torch.maximum(self.reach_fn(state), -self.avoid_fn(state))
+            reach_val = self.reach_fn(state)
+            avoid_val = self.avoid_fn(state)
+            v_eval =  torch.maximum(reach_val, -avoid_val)
+            # print(f'avoid val shape {avoid_val.shape}')
+            # # Check for NaN
+            # if torch.isnan(v_eval).any():
+            #     print("NaN detected in v_eval!")
+
+            # # Pinpoint the source
+            # reach_val = self.reach_fn(state)
+            # avoid_val = self.avoid_fn(state)
+
+            # if torch.isnan(reach_val).any():
+            #     print(f"  → NaN in reach_fn output: {torch.isnan(reach_val).sum()} values")
+            #     print(f"     reach_fn stats: min={reach_val.nanmean():.4f}, indices={torch.where(torch.isnan(reach_val))}")
+
+            # if torch.isnan(avoid_val).any():
+            #     print(f"  → NaN in avoid_fn output: {torch.isnan(avoid_val).sum()} values")
+            #     print(f"     avoid_fn stats: min={avoid_val.nanmean():.4f}, indices={torch.where(torch.isnan(avoid_val))}")
+
+            # if torch.isnan(state).any():
+            #     print(f"  → NaN in input state: {torch.isnan(state).sum()} values")
+            # else:
+            #     print("No NaN values detected.")
+            return v_eval 
         elif self.set_mode=='reach':
             return self.reach_fn(state)
 
@@ -2471,7 +2526,7 @@ class QuadrotorReachAvoidTunnel(Dynamics):
 
     def optimal_disturbance(self, state, dvds):
         return torch.zeros(1)
-    
+
     def rk4_step_quad(self, state, control, disturbance, dt):
         """
         Integrate dynamics one step using RK4.
@@ -2501,9 +2556,9 @@ class QuadrotorReachAvoidTunnel(Dynamics):
         return {
             'state_slices': [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             'state_labels': ['x', 'y', 'z', 'qw', 'qx', 'qy', 'qz', 'vx', 'vy', 'vz', 'wx', 'wy', 'wz'],
-            'x_axis_idx': 7,
-            'y_axis_idx': 8,
-            'z_axis_idx': 0,
+            'x_axis_idx': 0,
+            'y_axis_idx': 1,
+            'z_axis_idx': 7,
         }
 class PlanarQuadrotorEqBRAT(Dynamics):
     def __init__(self, set_mode: str):

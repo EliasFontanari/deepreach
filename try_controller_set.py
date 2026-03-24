@@ -28,14 +28,14 @@ def get_args():
     args_list = [
         "--mode", "test",
         "--experiment_class", "DeepReach",
-        "--dynamics_class", "QuadrotorReachAvoid",
-        "--experiment_name", "QUADRA6",
+        "--dynamics_class", "QuadrotorReachAvoidTunnel",
+        "--experiment_name", "QUADRATunnelMPCReach",
         "--minWith", "target",
         "--pretrain",
         "--pretrain_iters", "10000",
         "--num_target_samples", "5000",
         "--epochs_til_ckpt", "200",
-        "--set_mode", "reach_avoid"
+        "--set_mode", "avoid"
     ]
 
     p = configargparse.ArgumentParser()
@@ -210,35 +210,46 @@ def plot_state(model, device, dynamics, dataslice: np.ndarray, time: float, x_ax
         # s = ax.imshow(values.detach().cpu().numpy().reshape(x_resolution, y_resolution).T, cmap='bwr', origin='lower', extent=(-1., 1., -1., 1.))
         fig.colorbar(s) 
 
-        plt.show()
         return values.detach().cpu().numpy()
 
-val = plot_state(model,'cuda',dynamics_obj,np.array([0,  0,  0,  1., 0,  0, 0, 0, 0, 0, 0, 0, 0]),0.4,7,8,100,100)
+val = plot_state(model,'cuda',dynamics_obj,np.array([0,  0,  0,  1., 0,  0, 0, 0, 0, 0, 0, 0, 0]),1.5,0,1,100,100)
+val2 = plot_state(model,'cuda',dynamics_obj,np.array([0,  0,  0,  1., 0,  0, 0, 0, 0, 0, 0, 0, 0]),0.5,0,1,100,100)
+plt.show()
 
 # verification
 
-# sample a state in reach-avoid set
-value = 10
-while value > 0:
-    # Split min and max
-    low = dynamics_obj.state_range_[:, 0]
-    high = dynamics_obj.state_range_[:, 1]
+# # sample a state in reach-avoid set
+# value = 10
+# while value > 0:
+#     # Split min and max
+#     low = dynamics_obj.state_range_[:, 0]
+#     high = dynamics_obj.state_range_[:, 1]
 
-    # Uniform sample within bounds
-    state = low + (high - low) * torch.rand_like(low)
-    # state = torch.tensor([1.,0,0,1,0.0,0.0,0.,1.8,0,0,.0,0,0])
-    state = dynamics_obj.equivalent_wrapped_state(state)
-    time = 1.0
-    coord = torch.zeros(1, dynamics_obj.state_dim + 1)
-    coord[0,0] = time
-    coord[0,1:] = state
-    with torch.no_grad():
-        model_result = model({'coords': dynamics_obj.coord_to_input(coord.to('cuda'))})
-        value = dynamics_obj.io_to_value(model_result['model_in'].detach(), model_result['model_out'].squeeze(dim=-1).detach())
-    if bool(value < 0): print(f'State {state} value {value}')
+#     # Uniform sample within bounds
+#     state = low + (high - low) * torch.rand_like(low)
+#     # state = torch.tensor([1.,0,0,1,0.0,0.0,0.,1.8,0,0,.0,0,0])
+#     state = dynamics_obj.equivalent_wrapped_state(state)
+#     time = 1.0
+#     coord = torch.zeros(1, dynamics_obj.state_dim + 1)
+#     coord[0,0] = time
+#     coord[0,1:] = state
+#     with torch.no_grad():
+#         model_result = model({'coords': dynamics_obj.coord_to_input(coord.to('cuda'))})
+#         value = dynamics_obj.io_to_value(model_result['model_in'].detach(), model_result['model_out'].squeeze(dim=-1).detach())
+#     if bool(value < 0): print(f'State {state} value {value}')
 
-state =  torch.tensor([1.,0,0,1,0.0,0.0,0.,0,0,0,0,0,0])
-time = 0.4
+
+t_max = 2.0
+state =  torch.tensor([2.,-1.7,0,1,0.0,0.0,0.,0.,0,0,0,0,0])
+# quat = torch.tensor([ 0.844,  0.281,   0.102,  0.445])
+# state[3:7] = quat
+coord = torch.zeros(1, dynamics_obj.state_dim + 1)
+coord[0,0] = t_max
+coord[0,1:] = state
+with torch.no_grad():
+    model_result = model({'coords': dynamics_obj.coord_to_input(coord.to('cuda'))})
+    value = dynamics_obj.io_to_value(model_result['model_in'].detach(), model_result['model_out'].squeeze(dim=-1).detach())
+print(f'State {state} value {value}')
 # coord = torch.zeros(1, dynamics_obj.state_dim + 1)
 # coord[0,0] = time
 # coord[0,1:] = state
@@ -248,13 +259,13 @@ time = 0.4
 # print(f'State {state} value {value}')
 # simulation 
 dt = 0.005
-t_max = 1
 n_step = int(t_max/dt)
 traj = torch.zeros(n_step+1,dynamics_obj.state_dim)
 traj_u = torch.zeros(n_step,dynamics_obj.control_dim)
 traj[0] = state
 device = 'cuda'
 time = t_max
+time_vec = np.arange(int(time/dt))*dt
 for i in range(n_step):
     coord = torch.zeros(1,dynamics_obj.state_dim+1)
     coord[0] = time
@@ -266,8 +277,16 @@ for i in range(n_step):
     traj[i+1] = dynamics_obj.rk4_step_quad(traj[i],ctrl,0,dt)
 
     reach_val = dynamics_obj.boundary_fn(traj[i+1])
-    if bool(reach_val < 0):
-        print(f'Violation at time step {i} state{traj[i+1]}')
+    
+    if 'avoid' in orig_opt.set_mode and not 'reach' in orig_opt.set_mode:
+        if bool(reach_val < 0):
+            print(f'Violation at time step {i} state{traj[i+1]}')
+            break
+    else:
+        if bool(reach_val < 0):
+            print(f'Reached at time step {i} state{traj[i+1]}')
+            break
+
 
     time -= dt
 
@@ -322,6 +341,59 @@ def plot_u_trajectory(traj):
 
 plot_x_trajectory(traj_x)
 plot_u_trajectory(traj_u)
+# plt.show()
+
+from scipy.spatial.transform import Rotation as ROT
+def colored_3d_trajectory(ax, x, y, z, quat, t, step=30, arrow_len=0.15, cmap="plasma", lw=2):
+    """
+    Plot 3D trajectory with time-color scaling and RGB pose arrows every `step` points.
+    R_matrices: shape (3,3,N) or (N,3,3)
+    """
+    # --- trajectory ---
+    norm = plt.Normalize(vmin=t[0], vmax=t[-1])
+    colors = plt.get_cmap(cmap)(norm(t[:-1]))
+    points = np.array([x, y, z]).T
+    for i, col in enumerate(colors):
+        ax.plot(points[i:i+2, 0], points[i:i+2, 1], points[i:i+2, 2],
+                color=col, linewidth=lw, solid_capstyle="round")
+
+    # --- pose arrows ---
+    for i in np.arange(0, len(x), step):
+        pos = np.array([x[i], y[i], z[i]])
+        quat_ = np.hstack([quat[i,1:],quat[i,0]])
+        R = ROT.from_quat(quat_).as_matrix()
+        print(f'RPY : {dynamics_obj.quat_to_rpy_torch(torch.tensor(quat[i]))*180/3.14}')
+        for col, axis_idx in zip(["red", "green", "blue"], [0, 1, 2]):
+            d = R[:, axis_idx] * arrow_len
+            ax.quiver(pos[0], pos[1], pos[2],
+                      d[0], d[1], d[2],
+                      color=col, linewidth=1.2, arrow_length_ratio=0.3)
+
+    return norm, cmap
+
+def add_colorbar(fig, ax, norm, cmap):
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax, pad=0.12, shrink=0.6, aspect=20)
+    cbar.set_label("Time", fontsize=9)
+    cbar.set_ticks([0, 0.5, 1])
+    cbar.set_ticklabels(["Start", "Mid", "End"])
+    cbar.ax.tick_params(labelsize=8)
+
+fig = plt.figure()
+fig.suptitle("3D Trajectories — color encodes time", fontsize=13, fontweight="bold")
+
+ax1 = fig.add_subplot(111, projection="3d")
+
+x1, y1, z1, quat1 = traj_x[:,0], traj_x[:,1], traj_x[:,2], traj_x[:,3:7]
+norm1, cmap1 = colored_3d_trajectory(ax1, x1, y1, z1, quat1, time_vec, cmap="ocean")
+
+ax1.set_title("Original traj", fontsize=11)
+ax1.set_xlabel("X"); ax1.set_ylabel("Y"); ax1.set_zlabel("Z")
+ax1.legend(fontsize=8, loc="upper left")
+ax1.view_init(elev=25, azim=45)
+plt.tight_layout()
+plt.savefig("3d_trajectories.png", dpi=150, bbox_inches="tight")
 plt.show()
 
     

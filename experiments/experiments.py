@@ -923,7 +923,7 @@ class Experiment(ABC):
             imshow_kwargs = {
                 'vmax': max_value,
                 'vmin': min_value,
-                'cmap': 'coolwarm_r',
+                'cmap': 'viridis',
                 'extent': (x_min, x_max, y_min, y_max),
                 'origin': 'lower',
             }
@@ -995,7 +995,7 @@ class Experiment(ABC):
                 imshow_kwargs = {
                     'vmax': max_value,
                     'vmin': min_value,
-                    'cmap': 'coolwarm_r',
+                    'cmap': 'viridis',
                     'extent': (x_min, x_max, y_min, y_max),
                     'origin': 'lower',
                 }

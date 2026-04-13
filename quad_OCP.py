@@ -2,8 +2,8 @@ from casadi import *
 import numpy as np
 import matplotlib.pyplot as plt
 
-dt = 0.005
-T_max = 0.5
+dt = 0.0025
+T_max = 0.4
 
 collective_thrust_max = 30.0
 # body_rate_acc_max = body_rate_acc_max
@@ -23,8 +23,8 @@ goal_vz = [-0.1, 0.1]
 
 goal_wx = [-0.05, 0.05]
 goal_wy = [-0.05, 0.05]
-goal_roll = [-0.1, 0.1]
-goal_pitch = [-0.1, 0.1]
+goal_roll = [-0.0, 0.05]
+goal_pitch = [-0.05, 0.05]
 
 u_max = np.array([collective_thrust_max,dwx_max,dwy_max,dwz_max])
 
@@ -46,7 +46,7 @@ state_range = np.array(
             ],dtype=np.float64
         )
 
-x_0 = np.array([1.,0,0,1,0.0,0.0,0.,1.8,0,0,.0,0,0])
+x_0 = np.array([0,0,0,1,0,0,0,0.78,0,0,0,0,0],dtype=np.float64)  # initial state
 N = int(T_max / dt)
 
 opti = Opti()
@@ -165,7 +165,7 @@ opti.minimize(1)  # just respect constraint
 # opti.solver("ipopt") # set numerical backend
 # Set solver with options
 opts = {
-    'ipopt.tol': 1e-4,           # Overall convergence tolerance
+    'ipopt.tol': 1e-6,           # Overall convergence tolerance
     # 'ipopt.constr_viol_tol': 1e-6,  # Constraint violation tolerance
     # 'ipopt.dual_inf_tol': 1e-6,     # Dual infeasibility tolerance
     # 'ipopt.compl_inf_tol': 1e-6,    # Complementarity tolerance

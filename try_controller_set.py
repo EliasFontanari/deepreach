@@ -29,7 +29,7 @@ def get_args():
         "--mode", "test",
         "--experiment_class", "DeepReach",
         "--dynamics_class", "QuadrotorReachAvoid",
-        "--experiment_name", "QUADRA6",
+        "--experiment_name", "QUADRA3",
         "--minWith", "target",
         "--pretrain",
         "--pretrain_iters", "10000",
@@ -148,7 +148,7 @@ model = modules.SingleBVPNet(in_features=dynamics_obj.input_dim, out_features=1,
                              final_layer_factor=1., hidden_features=orig_opt.num_nl, num_hidden_layers=orig_opt.num_hl)
 model.to(orig_opt.device)
 
-checkpoint = experiment_dir + '/training/checkpoints/model_epoch_700000.pth'
+checkpoint = experiment_dir + '/training/checkpoints/model_epoch_300000.pth'
 
 model.load_state_dict(torch.load(checkpoint)['model'])
 
@@ -211,7 +211,7 @@ def plot_state(model, device, dynamics, dataslice: np.ndarray, time: float, x_ax
         plt.show()
         return values.detach().cpu().numpy()
 
-val = plot_state(model,orig_opt.device,dynamics_obj,np.array([1.,0,0,1,0.0,0.0,0.,1,0,0,0,0,0]),0.4,7,8,100,100)
+val = plot_state(model,orig_opt.device,dynamics_obj,np.array([0.,0,0,1,0.0,0.0,0.,1,0,0,0,0,0]),0.4,7,8,100,100)
 
 # verification
 
@@ -224,7 +224,8 @@ while value > 0:
 
     # Uniform sample within bounds
     state = low + (high - low) * torch.rand_like(low)
-    state = torch.tensor([1.,0,0,1,0.0,0.0,0.,1.8,0,0,.0,0,0])
+    state = torch.tensor([1,0,0,1,0,0,0,0.9,0,0,0,0,0])
+    # state[7:] /= 20
     state = dynamics_obj.equivalent_wrapped_state(state)
     time = 0.4
     coord = torch.zeros(1, dynamics_obj.state_dim + 1)
@@ -233,7 +234,9 @@ while value > 0:
     with torch.no_grad():
         model_result = model({'coords': dynamics_obj.coord_to_input(coord.to(orig_opt.device))})
         value = dynamics_obj.io_to_value(model_result['model_in'].detach(), model_result['model_out'].squeeze(dim=-1).detach())
+        print(f'state {state} value {value}')
     if bool(value < 0): print(f'State {state} value {value}')
+    
 
 # simulation 
 dt = 0.001
@@ -255,8 +258,11 @@ for i in range(n_step):
     traj[i+1] = dynamics_obj.rk4_step_quad(traj[i],ctrl,0,dt)
 
     reach_val = dynamics_obj.reach_fn(traj[i+1])
+    avoid_val = dynamics_obj.avoid_fn(traj[i+1])
     if bool(reach_val < 0):
         print(f'Reached at time step {i} state{traj[i+1]}')
+    if bool(avoid_val < 0):
+        print(f'Violation at time step {i} state{traj[i+1]}')
 
     time -= dt
 

@@ -1,0 +1,30 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Debugger: Current File with Arguments",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "args": [
+                "--mode",               "train",
+                "--dynamics_class",     "QuadrotorReachAvoidTunnel",
+                "--experiment_name",    "tunnel",
+                "--minWith",            "target",
+                // "--pretrain",
+                // "--pretrain_iters",     "50000",
+                "--num_target_samples", "4000",
+                "--epochs_til_ckpt",    "10000",
+                "--num_epochs",         "700000",
+                "--tMax",               "0.4",
+                "--lr",                 "0.000005",
+                "--set_mode", "reach_avoid",
+                "--not_use_MPC"
+            ]
+        }
+    ]
+}

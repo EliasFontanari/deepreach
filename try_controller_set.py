@@ -28,8 +28,8 @@ def get_args():
     args_list = [
         "--mode", "test",
         "--experiment_class", "DeepReach",
-        "--dynamics_class", "QuadrotorReachAvoidTunnel",
-        "--experiment_name", "QUADRATunnelMPCReach",
+        "--dynamics_class", "QuadrotorReachAvoid",
+        "--experiment_name", "QUADRA3",
         "--minWith", "target",
         "--pretrain",
         "--pretrain_iters", "10000",

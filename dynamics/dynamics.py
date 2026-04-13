@@ -1756,9 +1756,9 @@ class QuadrotorReachAvoid(Dynamics):
 
     def reach_fn(self, state):
 
-        # x = state[..., 0] * 1.0
-        # y = state[..., 1] * 1.0
-        # z = state[..., 2] * 1.0
+        x = state[..., 0] * 1.0
+        y = state[..., 1] * 1.0
+        z = state[..., 2] * 1.0
         qw = state[..., 3] * 1.0
         qx = state[..., 4] * 1.0
         qy = state[..., 5] * 1.0

@@ -29,7 +29,7 @@ def get_args():
         "--mode", "test",
         "--experiment_class", "DeepReach",
         "--dynamics_class", "QuadrotorReachAvoid",
-        "--experiment_name", "QUADRA3",
+        "--experiment_name", "QUADRA6",
         "--minWith", "target",
         "--pretrain",
         "--pretrain_iters", "10000",
@@ -212,8 +212,8 @@ def plot_state(model, device, dynamics, dataslice: np.ndarray, time: float, x_ax
 
         return values.detach().cpu().numpy()
 
-val = plot_state(model,'cuda',dynamics_obj,np.array([0,  0,  0,  1., 0,  0, 0, 0, 0, 0, 0, 0, 0]),1.5,0,1,100,100)
-val2 = plot_state(model,'cuda',dynamics_obj,np.array([0,  0,  0,  1., 0,  0, 0, 0, 0, 0, 0, 0, 0]),0.5,0,1,100,100)
+# val = plot_state(model,'cuda',dynamics_obj,np.array([0,  0,  0,  1., 0,  0, 0, 0, 0, 0, 0.8, 0.8, 0]),0.2,0,1,100,100)
+val2 = plot_state(model,'cuda',dynamics_obj,np.array([0,  0,  0, 0.9063, 0.1604, 0.3753, -0.0660, 0, 0, 0, 0., 0., 0]),0.5,0,1,100,100)
 plt.show()
 
 # verification
@@ -239,8 +239,8 @@ plt.show()
 #     if bool(value < 0): print(f'State {state} value {value}')
 
 
-t_max = 2.0
-state =  torch.tensor([2.,-1.7,0,1,0.0,0.0,0.,0.,0,0,0,0,0])
+t_max = 0.5
+state =  torch.tensor([0.,0,0,0.9063, 0.1604, 0.3753, -0.0660,-0.,-0.,0,0,0.,0.])
 # quat = torch.tensor([ 0.844,  0.281,   0.102,  0.445])
 # state[3:7] = quat
 coord = torch.zeros(1, dynamics_obj.state_dim + 1)
@@ -258,7 +258,7 @@ print(f'State {state} value {value}')
 #     value = dynamics_obj.io_to_value(model_result['model_in'].detach(), model_result['model_out'].squeeze(dim=-1).detach())
 # print(f'State {state} value {value}')
 # simulation 
-dt = 0.005
+dt = 0.001
 n_step = int(t_max/dt)
 traj = torch.zeros(n_step+1,dynamics_obj.state_dim)
 traj_u = torch.zeros(n_step,dynamics_obj.control_dim)
@@ -277,6 +277,7 @@ for i in range(n_step):
     traj[i+1] = dynamics_obj.rk4_step_quad(traj[i],ctrl,0,dt)
 
     reach_val = dynamics_obj.boundary_fn(traj[i+1])
+    avoid_val = dynamics_obj.avoid_fn(traj[i+1])
     
     if 'avoid' in orig_opt.set_mode and not 'reach' in orig_opt.set_mode:
         if bool(reach_val < 0):
@@ -285,6 +286,12 @@ for i in range(n_step):
     else:
         if bool(reach_val < 0):
             print(f'Reached at time step {i} state{traj[i+1]}')
+            break
+    if bool(reach_val < 0):
+            print(f'Reached at time step {i} state{traj[i+1]}')
+            break
+    if bool(avoid_val < 0):
+            print(f'Violation at time step {i} state{traj[i+1]}')
             break
 
 
@@ -396,4 +403,27 @@ plt.tight_layout()
 plt.savefig("3d_trajectories.png", dpi=150, bbox_inches="tight")
 plt.show()
 
-    
+states_to_sample = 100
+samples = []
+for i in range(states_to_sample):
+    value = 1
+    while value > 0:
+        # Split min and max
+        low = dynamics_obj.state_range_[:, 0]
+        high = dynamics_obj.state_range_[:, 1]
+
+        # Uniform sample within bounds
+        state = low + (high - low) * torch.rand_like(low)
+        state = dynamics_obj.equivalent_wrapped_state(state)
+        time = 0.5
+        coord = torch.zeros(1, dynamics_obj.state_dim + 1)
+        coord[0,0] = time
+        coord[0,1:] = state
+        with torch.no_grad():
+            model_result = model({'coords': dynamics_obj.coord_to_input(coord.to('cuda'))})
+            value = dynamics_obj.io_to_value(model_result['model_in'].detach(), model_result['model_out'].squeeze(dim=-1).detach())
+        if bool(value < 0): 
+            print(f'State {state} value {value}')
+            samples.append(state.cpu().numpy())
+samples = np.array(samples)
+np.save('sampled_states.npy', samples)

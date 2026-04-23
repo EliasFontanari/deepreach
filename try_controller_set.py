@@ -29,7 +29,7 @@ def get_args():
         "--mode", "test",
         "--experiment_class", "DeepReach",
         "--dynamics_class", "QuadrotorReachAvoid",
-        "--experiment_name", "QUADRA3",
+        "--experiment_name", "QUADRA",
         "--minWith", "target",
         "--pretrain",
         "--pretrain_iters", "10000",
@@ -148,7 +148,7 @@ model = modules.SingleBVPNet(in_features=dynamics_obj.input_dim, out_features=1,
                              final_layer_factor=1., hidden_features=orig_opt.num_nl, num_hidden_layers=orig_opt.num_hl)
 model.to(orig_opt.device)
 
-checkpoint = experiment_dir + '/training/checkpoints/model_epoch_300000.pth'
+checkpoint = experiment_dir + '/training/checkpoints/model_epoch_280000.pth'
 
 model.load_state_dict(torch.load(checkpoint)['model'])
 
@@ -207,11 +207,13 @@ def plot_state(model, device, dynamics, dataslice: np.ndarray, time: float, x_ax
         s = plt.imshow(1*(values.detach().cpu().numpy().reshape(x_resolution, y_resolution).T <= 0), cmap='bwr', origin='lower', extent=(x_min.cpu(), x_max.cpu(), y_min.cpu(), y_max.cpu()))
         # s = ax.imshow(values.detach().cpu().numpy().reshape(x_resolution, y_resolution).T, cmap='bwr', origin='lower', extent=(-1., 1., -1., 1.))
         fig.colorbar(s) 
+        plt.grid(True)
 
-        plt.show()
         return values.detach().cpu().numpy()
 
-val = plot_state(model,orig_opt.device,dynamics_obj,np.array([0.,0,0,1,0.0,0.0,0.,1,0,0,0,0,0]),0.4,7,8,100,100)
+val = plot_state(model,orig_opt.device,dynamics_obj,np.array([-0.75,0,0,1,0.0,0.0,0.,1,0,0,0,0,0]),0.25,7,8,100,100)
+val2 = plot_state(model,orig_opt.device,dynamics_obj,np.array([0.75,0,0,1,0.0,0.0,0.,1,0,0,0,0,0]),0.25,7,8,100,100)
+plt.show()
 
 # verification
 

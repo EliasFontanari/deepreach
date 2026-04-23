@@ -29,7 +29,7 @@ def get_args():
         "--mode", "test",
         "--experiment_class", "DeepReach",
         "--dynamics_class", "QuadrotorReachAvoid",
-        "--experiment_name", "QUADRA",
+        "--experiment_name", "QUADRA3",
         "--minWith", "target",
         "--pretrain",
         "--pretrain_iters", "10000",
@@ -211,8 +211,8 @@ def plot_state(model, device, dynamics, dataslice: np.ndarray, time: float, x_ax
 
         return values.detach().cpu().numpy()
 
-val = plot_state(model,orig_opt.device,dynamics_obj,np.array([-0.75,0,0,1,0.0,0.0,0.,1,0,0,0,0,0]),0.25,7,8,100,100)
-val2 = plot_state(model,orig_opt.device,dynamics_obj,np.array([0.75,0,0,1,0.0,0.0,0.,1,0,0,0,0,0]),0.25,7,8,100,100)
+val = plot_state(model,orig_opt.device,dynamics_obj,np.array([0,0,0,1,0.0,0.0,0.,1,0,0,0,0,0]),0.4,7,8,100,100)
+val2 = plot_state(model,orig_opt.device,dynamics_obj,np.array([0.,0,0,1,0.0,0.0,0.,1,0,0,0,0,0]),0.25,7,8,100,100)
 plt.show()
 
 # verification

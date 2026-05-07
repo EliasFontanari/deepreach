@@ -48,6 +48,7 @@ class QuadOCP:
         self.goal_roll = (-0.05, 0.05)
         self.goal_pitch = (-0.05, 0.05)
 
+        self.goal_equilibrium = np.array([ self.goal_roll[1], self.goal_pitch[1],self.goal_vx[1], self.goal_vy[1], self.goal_vz[1],self.goal_wx[1], self.goal_wy[1]], dtype=np.float64)
         self.u_max = np.array(
             [self.collective_thrust_max, self.dwx_max, self.dwy_max, self.dwz_max],
             dtype=np.float64,
@@ -73,6 +74,7 @@ class QuadOCP:
         )
 
         self.target_pos = np.array([2.0, -3.8, 0.0], dtype=np.float64)
+        self.index_target = [4,5,7,8,9,10,11]
 
         self.N = int(self.T_max / self.dt)
         self.opti, self.X, self.U, self.x_init_param = self._build_opti()
@@ -136,6 +138,29 @@ class QuadOCP:
         y_term = cs.power((y - 0.8) / (self.corridor_width_y / 2.0), 6)
         exp_term = cs.power(x_term + y_term, 4)
         return z - (10.0 * cs.exp(-exp_term) - 4.0)
+    
+    def check_room_constraint(self, state_xyz):
+        if np.any(np.abs(state_xyz) > self.state_range[:3,1]):
+            return 1
+        return -1
+
+    def check_reaching_target(self, state_xyz):
+        if np.linalg.norm(state_xyz - self.target_pos) < 0.15 and np.all(np.abs(state_xyz[self.index_target]) < self.goal_equilibrium):
+            return True
+        return False
+    
+    def compute_l(self, state):
+        pos_const = np.linalg.norm(state[:3] - self.target_pos)
+        vel_cost = np.linalg.norm(state[self.index_target])
+        return np.max([pos_const, vel_cost]) - 0.15
+    
+    def compute_g(self, state):
+        wall_constr = -self.wall_fn_single(state[:3])
+        room_constr = self.check_room_constraint(state[:3])
+        if  wall_constr >= 0 or room_constr >= 0:
+            return 1
+        else:
+            return -1
 
     def _build_opti(self):
         opti = cs.Opti()
@@ -145,8 +170,8 @@ class QuadOCP:
 
         Q_vel = np.eye(6) * 2
         Q_target = np.eye(3) * 10
-        wall_slack_weight = 500000.0
-        bound_slack_weight = 200.0
+        wall_slack_weight = 50000.0
+        bound_slack_weight = 50000.0
         cost = 0
 
         step_fn = self.rk4_step_fn()
@@ -207,11 +232,14 @@ class QuadOCP:
         if self.solver_opts is not None:
             opts = self.solver_opts
         elif self.solver_name == "ipopt":
+            print("Using IPOPT solver with default options.")
             opts = {
                 "ipopt.tol": 1e-6,
-                "ipopt.print_level": 5,
+                "ipopt.print_level": 0,
                 "ipopt.start_with_resto": "yes",
                 "ipopt.max_iter": 5000,
+                "print_time": 0,
+                "verbose": False,
             }
         else:
             opts = {}
@@ -319,51 +347,53 @@ class QuadOCP:
         ax.set_title(title)
         return ax
 
-solver = QuadOCP()
+# solver = QuadOCP()
 
-#MPC loop
-N_max = 2000
-MPC_frequency = 10 # steps
-x0 = np.array([-3, -1, 0.0, 1.0, 0.0, 0.0, 0.0, 0., 0., 0.0, 0.0, 0.0, 0.0], dtype=np.float64)
-traj = np.zeros((N_max+1, 13))
-traj_u = np.zeros((N_max, 4))
-traj[0, :] = x0
-for i in range(N_max):
-    print(f"Step {i+1}/{N_max}")
+# #MPC loop
+# N_max = 2000
+# MPC_frequency = 10 # steps
+# x0 = np.array([-3, -1, 0.0, 1.0, 0.0, 0.0, 0.0, 0., 0., 0.0, 0.0, 0.0, 0.0], dtype=np.float64)
+# traj = np.zeros((N_max+1, 13))
+# traj_u = np.zeros((N_max, 4))
+# traj[0, :] = x0
+# for i in range(N_max):
+#     print(f"Step {i+1}/{N_max}")
 
-    if i % MPC_frequency == 0:
-        sol = solver.solve(traj[i, :])
-        traj_u[i:i+MPC_frequency, :] = (sol["traj_u"][:, :MPC_frequency]).T
+#     if i % MPC_frequency == 0:
+#         sol = solver.solve(traj[i, :])
+#         traj_u[i:i+MPC_frequency, :] = (sol["traj_u"][:, :MPC_frequency]).T
+
+#         traj_x = sol["traj_x"]
+#         wall_fails = 0
+#         for j in range(traj_x.shape[0]):
+#             if solver.wall_fn_single(traj_x[:3, j]) < -0.02:
+#                 print(f"Warning: Trajectory point {j} is violating the wall constraint with value {solver.wall_fn_single(traj_x[:3, j])} at state {traj_x[:3, j]}")
+#                 wall_fails += 1
+#         if wall_fails == 0:    
+#             print("All trajectory points satisfy the wall constraint.")
     
-    x_next = np.array(solver.rk4_step_fn()(traj[i, :], traj_u[i, :])).squeeze()
+#     x_next = np.array(solver.rk4_step_fn()(traj[i, :], traj_u[i, :])).squeeze()
 
     
-    traj[i+1, :] = x_next
-    if i % 50 == 0:
-        # plot = solver.plot_xy_trajectory(sol["traj_x"], title=f"MPC Trajectory (step {i+1})", show_wall=True)
-        # plot = solver.plot_xyz_trajectory(sol["traj_x"], title=f"MPC Trajectory (step {i+1})", show_wall=True)
-        plot = solver.plot_xyz_trajectory(traj[:i+1].T, title=f"MPC Trajectory (step {i+1})", show_wall=True)
+#     traj[i+1, :] = x_next
+#     if i % 50 == 0:
+#         plot = solver.plot_xy_trajectory(traj[:i+1].T, title=f"MPC Trajectory (step {i+1})", show_wall=True)
+#         # plot = solver.plot_xyz_trajectory(sol["traj_x"], title=f"MPC Trajectory (step {i+1})", show_wall=True)
+#         plot = solver.plot_xyz_trajectory(traj[:i+1].T, title=f"MPC Trajectory (step {i+1})", show_wall=True)
 
-        plt.show()
-
-    # traj_x = sol["traj_x"]
-    # wall_fails = 0
-    # for j in range(traj_x.shape[0]):
-    #     if solver.wall_fn_single(traj_x[:3, j]) < -0.02:
-    #         print(f"Warning: Trajectory point {j} is violating the wall constraint with value {solver.wall_fn_single(traj_x[:3, j])} at state {traj_x[:3, j]}")
-    #         wall_fails += 1
-    # if wall_fails == 0:    
-    #     print("All trajectory points satisfy the wall constraint.")
-
-plot = solver.plot_xy_trajectory(traj.T, title="MPC Trajectory (top-down)", show_wall=True)
-plt.show()
-
-print(f'Last state: {traj[-1, :]}')
+#         plt.show()
 
 
 
-# print(solver.solve(np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.75, 0.75, 0.0, 0.0, 0.0, 0.0], dtype=np.float64)))
-# plot = solver.plot_xy_trajectory(solver.solve(np.array([-1.0, -3.5, 0.0, 1.0, 0.0, 0.0, 0.0, 0., 0., 0.0, 0.0, 0.0, 0.0], dtype=np.float64))["traj_x"])
+# plot = solver.plot_xy_trajectory(traj.T, title="MPC Trajectory (top-down)", show_wall=True)
 # plt.show()
-# print('solve again')
-# print(a.solve(np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.75, 0.75, 0.0, 0.0, 0.0, 0.0], dtype=np.float64)))
+
+# print(f'Last state: {traj[-1, :]}')
+
+
+
+# # print(solver.solve(np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.75, 0.75, 0.0, 0.0, 0.0, 0.0], dtype=np.float64)))
+# # plot = solver.plot_xy_trajectory(solver.solve(np.array([-1.0, -3.5, 0.0, 1.0, 0.0, 0.0, 0.0, 0., 0., 0.0, 0.0, 0.0, 0.0], dtype=np.float64))["traj_x"])
+# # plt.show()
+# # print('solve again')
+# # print(a.solve(np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.75, 0.75, 0.0, 0.0, 0.0, 0.0], dtype=np.float64)))

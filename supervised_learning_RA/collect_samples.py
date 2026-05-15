@@ -1,63 +1,120 @@
+import os
+import concurrent.futures
+import multiprocessing as mp
+
 import numpy as np
 from quad_ocp import QuadOCP
 import matplotlib.pyplot as plt
 import tqdm as tqdm
-
-n_episodes = 1000
+import pickle
+n_episodes = 10000
 MPC_frequency = 10
 T_tot = 7.5
+n_workers = 7
 
+def generate_pairs(data):
+    """
+    Execute on n_episodes x horizon x (states + reached + violated) data
+    """
+    pairs = []
+    for j in range(0, data.shape[0] - 1, 1):
+        if (data[j, :] != np.zeros(data.shape[1])).any() and (
+            data[j + 1, :] != np.zeros(data.shape[1])
+        ).any():
+            pairs.append(np.hstack((data[j, :], data[j + 1, :])))
+    return np.array(pairs)
 
-solver = QuadOCP()
+def rollout_episode(episode_idx, seed):
+    rng = np.random.default_rng(seed)
+    solver = QuadOCP()
+    step_fn = solver.rk4_step_fn()
+    rollout_states = []
 
-print(f'Timesteps = {T_tot/solver.dt}')
-
-rollout_states = []
-l_s, g_s = [], []
-
-successes = 0
-failures = 0
-for episode in tqdm.tqdm(range(n_episodes)):
-    stop_episodes = False
-    x0 = np.random.uniform(low=solver.state_range[:, 0], high=solver.state_range[:, 1])
+    x0 = rng.uniform(low=solver.state_range[:, 0], high=solver.state_range[:, 1])
     x0[3:7] /= np.linalg.norm(x0[3:7])
 
-    print(f'Initial state: {x0}')
-    rollout_states.append(x0)
-    l_s.append(solver.compute_l(x0))
-    g_s.append(solver.compute_g(x0))
+    rollout_states.append(np.hstack((x0, solver.compute_l(x0), solver.compute_g(x0))))
+
+    sol_u = None
+    
+    success = False
     for i in range(int(T_tot / solver.dt)):
         if i % MPC_frequency == 0:
-            sol_u = solver.solve(rollout_states[-1])["traj_u"][:, :MPC_frequency]
-        x_next = np.array(solver.rk4_step_fn()(rollout_states[-1], sol_u[:, i % MPC_frequency])).squeeze()  
-        l_s.append(solver.compute_l(x_next))
-        g_s.append(solver.compute_g(x_next))        
-        rollout_states.append(x_next)
+            try:
+                sol_u = solver.solve(rollout_states[-1][:x0.shape[0]])["traj_u"][:, :MPC_frequency]
+            except:
+                print(f"Episode {episode_idx}: MPC failed at step {i}, state: {rollout_states[-1]}")
+                return {
+                "pairs":generate_pairs(np.array(rollout_states)),
+                "success": False,
+                "episode_length": i,
+            }
+        x_next = np.array(step_fn(rollout_states[-1][:x0.shape[0]], sol_u[:, i % MPC_frequency])).squeeze()
+        l_s = solver.compute_l(x_next)
+        g_s = solver.compute_g(x_next)
+        rollout_states.append(np.hstack((x_next, l_s, g_s)))
 
-        # print(f"Is episode {episode}, step {i}: State {x_next} within target region? {l_s[-1]}, Constraint violation: {g_s[-1]}")
+        if g_s >= 0.0:
+            for j in range(min(10, i)):
+                rollout_states[-j][-1] = 1 - 0.2 * j
+            return {
+                "pairs": generate_pairs(np.array(rollout_states)),
+                "success": False,
+                "episode_length": i,
+            }
+        if rollout_states[-1][-2] < 0 and not success:
+            success = True
+            return {
+            "pairs": generate_pairs(np.array(rollout_states)),
+            "success": success,
+            "episode_length": i,
+        }
 
-        # if i % 50 == 0 and i > 0:
-        #     plot = solver.plot_xy_trajectory(np.array(rollout_states[-i:]).T)
-        #     print(f'l(x) reaching = {solver.compute_l(x_next)}')
-        #     plt.show()
-        if not solver.check_room_constraint(x_next[:3]) or solver.wall_fn_single(x_next[:3]) < -0.0:
-            # print(f"Episode {episode}, step {i}: State {x_next[:3]} violates constraints. Ending episode.")
-            for j in range(min(10,i)):
-                g_s[-j] = 1 - 0.2 * j
-            stop_episodes = True
-            failures += 1
-            break
-        if l_s[-1] < 0:
-            # print(f"Episode {episode}, step {i}: State {x_next[:3]} is within target region. Ending episode.")
-            stop_episodes = True
-            successes += 1
-        if stop_episodes:
-            break
+    rollout_states[-1][-2] = 1
+    return {
+        "pairs": generate_pairs(np.array(rollout_states)),
+        "success": success,
+        "episode_length": i,
+    }
 
-print(f"Total successes: {successes}, Total failures: {failures}")
-x_traj = np.array(rollout_states)
-l_s = np.array(l_s)
-g_s = np.array(g_s)
 
-print(f'Number of collected samples: {x_traj.shape[0]}')
-np.savez('quad_samples.npz', states=x_traj, l_s=l_s, g_s=g_s)
+def main():
+    seed_base = 12345
+    ctx = mp.get_context("spawn")
+    futures = []
+    results = []
+    successes = 0
+    failures = 0
+
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=n_workers, mp_context=ctx
+    ) as executor:
+        for episode in range(n_episodes):
+            futures.append(executor.submit(rollout_episode, episode, seed_base + episode))
+
+        for fut in tqdm.tqdm(concurrent.futures.as_completed(futures), total=n_episodes):
+            res = fut.result()
+            results.append(res)
+            if res["success"]:
+                successes += 1
+            else:
+                failures += 1
+
+    x_traj = np.concatenate([r["pairs"] for r in results], axis=0)
+    # x_traj = [r['pairs'] for r in results if r['pairs'].shape[0] > 0]
+
+
+    # pickle.dump(x_traj, open("quad_samples_pairs.pkl", "wb"))
+    
+    episodes_lengths = [r["episode_length"] for r in results]
+    
+    np.save("quad_samples_pairs.npy", x_traj)
+    
+    print(f"Average episode length: {np.mean(episodes_lengths):.2f} steps")
+
+    print(f"Total successes: {successes}, Total failures: {failures}")
+    # print(f"Number of collected samples: {sum([x.shape[0] for x in x_traj])}")
+    print(f"Number of collected pairs: {x_traj.shape[0]}")
+
+if __name__ == "__main__":
+    main()

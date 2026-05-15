@@ -1,6 +1,7 @@
 import casadi as cs
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.patches import Circle
 from matplotlib.collections import LineCollection
 from mpl_toolkits.mplot3d.art3d import Line3DCollection
 
@@ -23,6 +24,7 @@ class QuadOCP:
         corridor_width_y=8.0,
         solver_name="ipopt",
         solver_opts=None,
+        soft_constraints=True,
     ):
         self.dt = dt
         self.T_max = T_max
@@ -32,6 +34,7 @@ class QuadOCP:
         self.CT = CT
         self.CM = CM
         self.Gz = Gz
+        self.drone_radius = 0.15
         self.dwx_max = dwx_max
         self.dwy_max = dwy_max
         self.dwz_max = dwz_max
@@ -39,6 +42,9 @@ class QuadOCP:
         self.corridor_width_y = corridor_width_y
         self.solver_name = solver_name
         self.solver_opts = solver_opts
+        self.l_scale = 0.5
+
+        self.soft_constraints = soft_constraints
 
         self.goal_vx = (-0.05, 0.05)
         self.goal_vy = (-0.05, 0.05)
@@ -73,8 +79,14 @@ class QuadOCP:
             dtype=np.float64,
         )
 
-        self.target_pos = np.array([2.0, -3.8, 0.0], dtype=np.float64)
+        self.target_pos = np.array([2.0, -2.0, 0.0], dtype=np.float64)
         self.index_target = [4,5,7,8,9,10,11]
+
+        self.wall_active = False
+        self.cylinders_active = True
+
+        self.cylinders = np.array([[0,2,1.5], 
+                                  [0,-2, 1.5]])
 
         self.N = int(self.T_max / self.dt)
         self.opti, self.X, self.U, self.x_init_param = self._build_opti()
@@ -139,8 +151,24 @@ class QuadOCP:
         exp_term = cs.power(x_term + y_term, 4)
         return z - (10.0 * cs.exp(-exp_term) - 4.0)
     
+    def cylinder_fn(self, cylinder_pos, cylinder_rad, state_xyz):
+        x = state_xyz[0, :]
+        y = state_xyz[1, :]
+        cylinder_pos = cs.repmat(cs.vertcat(cylinder_pos[0], cylinder_pos[1]), 1, x.size(2))
+        xy = cs.vertcat(x, y)
+        dist2_to_cylinder = cs.sum1((xy - cylinder_pos)**2)
+        return dist2_to_cylinder - ((self.drone_radius + cylinder_rad) ** 2)
+    
+    def cylinder_fn_single(self, cylinder_pos, cylinder_rad, state_xyz):
+        x = state_xyz[0]
+        y = state_xyz[1]
+        xy = cs.vertcat(x, y)
+        dist2_to_cylinder = cs.sum1((xy - cylinder_pos)**2)
+        return dist2_to_cylinder - ((self.drone_radius + cylinder_rad) ** 2)
+
+
     def check_room_constraint(self, state_xyz):
-        if np.any(np.abs(state_xyz) > self.state_range[:3,1]):
+        if np.any(state_xyz > (self.state_range[:3,1] - self.drone_radius +1e-3)) or np.any(state_xyz < self.state_range[:3,0] + self.drone_radius - 1e-3):
             return 1
         return -1
 
@@ -151,16 +179,24 @@ class QuadOCP:
     
     def compute_l(self, state):
         pos_const = np.linalg.norm(state[:3] - self.target_pos)
-        vel_cost = np.linalg.norm(state[self.index_target])
-        return np.max([pos_const, vel_cost]) - 0.15
+        target_abs_max = np.max(np.abs(state[self.index_target]))
+        raw_l = max(pos_const - 0.15, target_abs_max - 0.1)
+        return np.tanh(raw_l / self.l_scale)
     
     def compute_g(self, state):
-        wall_constr = -self.wall_fn_single(state[:3])
+        if self.wall_active:
+            wall_constr = -self.wall_fn_single(state[:3])
+            if wall_constr >= 0:
+                return 1
+        if self.cylinders_active:
+            for j_cyl in range(self.cylinders.shape[0]):
+                cyl_constr = -self.cylinder_fn_single(self.cylinders[j_cyl, :2], self.cylinders[j_cyl, 2], state[:3])
+                if cyl_constr >= 1e-3:
+                    return 1
         room_constr = self.check_room_constraint(state[:3])
-        if  wall_constr >= 0 or room_constr >= 0:
+        if room_constr >= 0:
             return 1
-        else:
-            return -1
+        return -1
 
     def _build_opti(self):
         opti = cs.Opti()
@@ -170,8 +206,7 @@ class QuadOCP:
 
         Q_vel = np.eye(6) * 2
         Q_target = np.eye(3) * 10
-        wall_slack_weight = 50000.0
-        bound_slack_weight = 50000.0
+        
         cost = 0
 
         step_fn = self.rk4_step_fn()
@@ -184,16 +219,29 @@ class QuadOCP:
             cost += x_cost.T @ Q_vel @ x_cost
             cost += (X[:3, k] - self.target_pos[:3]).T @ Q_target @ (X[:3, k] - self.target_pos[:3])
 
-        s_pos_low = opti.variable(3, self.N + 1)
-        s_pos_up = opti.variable(3, self.N + 1)
-        opti.subject_to(cs.vec(s_pos_low) >= 0)
-        opti.subject_to(cs.vec(s_pos_up) >= 0)
-        opti.subject_to(X[0, :] >= self.state_range[0, 0] - s_pos_low[0, :])
-        opti.subject_to(X[0, :] <= self.state_range[0, 1] + s_pos_up[0, :])
-        opti.subject_to(X[1, :] >= self.state_range[1, 0] - s_pos_low[1, :])
-        opti.subject_to(X[1, :] <= self.state_range[1, 1] + s_pos_up[1, :])
-        opti.subject_to(X[2, :] >= self.state_range[2, 0] - s_pos_low[2, :])
-        opti.subject_to(X[2, :] <= self.state_range[2, 1] + s_pos_up[2, :])
+
+        if self.soft_constraints:
+            wall_slack_weight = 50000.0
+            bound_slack_weight = 50000.0
+            s_pos_low = opti.variable(3, self.N + 1)
+            s_pos_up = opti.variable(3, self.N + 1)
+            opti.subject_to(cs.vec(s_pos_low) >= 0)
+            opti.subject_to(cs.vec(s_pos_up) >= 0)
+            soft_flag = 1
+        else:
+            soft_flag = 0
+            wall_slack_weight = 0
+            bound_slack_weight = 0
+            s_pos_low = opti.variable(3, self.N + 1)
+            s_pos_up = opti.variable(3, self.N + 1)
+
+
+        opti.subject_to(X[0, :] >= self.state_range[0, 0] - soft_flag * s_pos_low[0, :] + self.drone_radius)
+        opti.subject_to(X[0, :] <= self.state_range[0, 1] + soft_flag * s_pos_up[0, :] - self.drone_radius)
+        opti.subject_to(X[1, :] >= self.state_range[1, 0] - soft_flag * s_pos_low[1, :] + self.drone_radius)
+        opti.subject_to(X[1, :] <= self.state_range[1, 1] + soft_flag * s_pos_up[1, :] - self.drone_radius)
+        opti.subject_to(X[2, :] >= self.state_range[2, 0] - soft_flag * s_pos_low[2, :] + self.drone_radius)
+        opti.subject_to(X[2, :] <= self.state_range[2, 1] + soft_flag * s_pos_up[2, :] - self.drone_radius)
 
         opti.subject_to(U[0, :] >= -self.u_max[0])
         opti.subject_to(U[0, :] <= self.u_max[0])
@@ -205,9 +253,17 @@ class QuadOCP:
         opti.subject_to(U[3, :] <= self.u_max[3])
 
         opti.subject_to(X[:, 0] == x_init_param)
-        s_wall = opti.variable(1, self.N + 1)
-        opti.subject_to(cs.vec(s_wall) >= 0)
-        opti.subject_to(self.wall_fn(X[0:3, :]) + s_wall >= 0)
+
+
+        s_cyl = opti.variable(1, self.N + 1)
+        s_wall = opti.variable(1, self.N + 1)            
+
+        if self.wall_active:
+            opti.subject_to(self.wall_fn(X[0:3, :]) + soft_flag * s_wall >= 0)
+
+        if self.cylinders_active:     
+            for j_cyl in range(self.cylinders.shape[0]):
+                opti.subject_to(self.cylinder_fn(self.cylinders[j_cyl, :2], self.cylinders[j_cyl, 2], X[0:2,:]) + soft_flag * s_cyl >= 0)
 
         # opti.subject_to(opti.bounded(self.goal_vx[0], X[7, -1], self.goal_vx[1]))
         # opti.subject_to(opti.bounded(self.goal_vy[0], X[8, -1], self.goal_vy[1]))
@@ -222,11 +278,10 @@ class QuadOCP:
 
         # opti.subject_to(cs.norm_2(X[:2, -1] - self.target_pos[:2]) < 0.15)
 
+        cost +=  bound_slack_weight * cs.sumsqr(s_pos_low) + bound_slack_weight * cs.sumsqr(s_pos_up) +wall_slack_weight * cs.sumsqr(s_wall) + (wall_slack_weight if self.cylinders_active else 0) * cs.sumsqr(s_cyl)
+        
         opti.minimize(
-            cost
-            + bound_slack_weight * cs.sumsqr(s_pos_low)
-            + bound_slack_weight * cs.sumsqr(s_pos_up)
-            + wall_slack_weight * cs.sumsqr(s_wall)
+            cost  
         )
 
         if self.solver_opts is not None:
@@ -236,8 +291,8 @@ class QuadOCP:
             opts = {
                 "ipopt.tol": 1e-6,
                 "ipopt.print_level": 0,
-                "ipopt.start_with_resto": "yes",
-                "ipopt.max_iter": 5000,
+                # "ipopt.start_with_resto": "yes",
+                "ipopt.max_iter": 1000,
                 "print_time": 0,
                 "verbose": False,
             }
@@ -265,7 +320,7 @@ class QuadOCP:
             "traj_u": traj_u,
         }
 
-    def plot_xy_trajectory(self, traj_x, ax=None, title="XY trajectory (top-down)", show_wall=True):
+    def plot_xy_trajectory(self, traj_x, ax=None, title="XY trajectory (top-down)", show_wall=True, show_cylinders=True, show_target=True):
         if ax is None:
             _, ax = plt.subplots(figsize=(6, 6))
         x_vals = traj_x[0, :]
@@ -282,7 +337,7 @@ class QuadOCP:
         ax.set_aspect("equal", adjustable="box")
         ax.set_xlim(self.state_range[0, 0], self.state_range[0, 1])
         ax.set_ylim(self.state_range[1, 0], self.state_range[1, 1])
-        if show_wall:
+        if show_wall and self.wall_active:
             x_min, x_max = self.state_range[0, 0], self.state_range[0, 1]
             y_min, y_max = self.state_range[1, 0], self.state_range[1, 1]
             x_grid = np.linspace(x_min, x_max, 200)
@@ -293,13 +348,19 @@ class QuadOCP:
             exp_term = (x_term + y_term) ** 4
             wall_z = 10.0 * np.exp(-exp_term) - 4.0
             ax.contour(Xg, Yg, wall_z, levels=[0.0], colors="black", linewidths=1.0)
+        if show_cylinders and self.cylinders_active:
+            for cyl in self.cylinders:
+                circle = Circle((cyl[0], cyl[1]), cyl[2], color="gray", fill=False, linewidth=1.5)
+                ax.add_patch(circle)
+        if show_target:
+            ax.scatter(self.target_pos[0], self.target_pos[1], marker="x", color="red", s=80, linewidths=2)
         ax.set_xlabel("x")
         ax.set_ylabel("y")
         ax.set_title(title)
         ax.grid(True, linestyle="--", alpha=0.4)
         return ax
 
-    def plot_xyz_trajectory(self, traj_x, ax=None, title="XYZ trajectory", show_wall=True):
+    def plot_xyz_trajectory(self, traj_x, ax=None, title="XYZ trajectory", show_wall=True, show_cylinders=True, show_target=True):
         if ax is None:
             fig = plt.figure(figsize=(7, 6))
             ax = fig.add_subplot(111, projection="3d")
@@ -316,7 +377,7 @@ class QuadOCP:
         else:
             ax.plot(x_vals, y_vals, z_vals, linewidth=2)
 
-        if show_wall:
+        if show_wall and self.wall_active:
             x_min, x_max = self.state_range[0, 0], self.state_range[0, 1]
             y_min, y_max = self.state_range[1, 0], self.state_range[1, 1]
             x_grid = np.linspace(x_min, x_max, 80)
@@ -337,6 +398,35 @@ class QuadOCP:
                 linewidth=0,
                 antialiased=True,
             )
+        if show_cylinders and self.cylinders_active:
+            z_min, z_max = self.state_range[2, 0], self.state_range[2, 1]
+            theta = np.linspace(0.0, 2.0 * np.pi, 60)
+            z_grid = np.linspace(z_min, z_max, 20)
+            Theta, Zc = np.meshgrid(theta, z_grid)
+            for cyl in self.cylinders:
+                Xc = cyl[0] + cyl[2] * np.cos(Theta)
+                Yc = cyl[1] + cyl[2] * np.sin(Theta)
+                ax.plot_surface(
+                    Xc,
+                    Yc,
+                    Zc,
+                    rstride=1,
+                    cstride=1,
+                    color="gray",
+                    alpha=0.2,
+                    linewidth=0,
+                    antialiased=True,
+                )
+        if show_target:
+            ax.scatter(
+                [self.target_pos[0]],
+                [self.target_pos[1]],
+                [self.target_pos[2]],
+                marker="x",
+                color="red",
+                s=80,
+                linewidths=2,
+            )
 
         ax.set_xlim(self.state_range[0, 0], self.state_range[0, 1])
         ax.set_ylim(self.state_range[1, 0], self.state_range[1, 1])
@@ -347,53 +437,75 @@ class QuadOCP:
         ax.set_title(title)
         return ax
 
-# solver = QuadOCP()
 
-# #MPC loop
-# N_max = 2000
-# MPC_frequency = 10 # steps
-# x0 = np.array([-3, -1, 0.0, 1.0, 0.0, 0.0, 0.0, 0., 0., 0.0, 0.0, 0.0, 0.0], dtype=np.float64)
-# traj = np.zeros((N_max+1, 13))
-# traj_u = np.zeros((N_max, 4))
-# traj[0, :] = x0
-# for i in range(N_max):
-#     print(f"Step {i+1}/{N_max}")
-
-#     if i % MPC_frequency == 0:
-#         sol = solver.solve(traj[i, :])
-#         traj_u[i:i+MPC_frequency, :] = (sol["traj_u"][:, :MPC_frequency]).T
-
-#         traj_x = sol["traj_x"]
-#         wall_fails = 0
-#         for j in range(traj_x.shape[0]):
-#             if solver.wall_fn_single(traj_x[:3, j]) < -0.02:
-#                 print(f"Warning: Trajectory point {j} is violating the wall constraint with value {solver.wall_fn_single(traj_x[:3, j])} at state {traj_x[:3, j]}")
-#                 wall_fails += 1
-#         if wall_fails == 0:    
-#             print("All trajectory points satisfy the wall constraint.")
-    
-#     x_next = np.array(solver.rk4_step_fn()(traj[i, :], traj_u[i, :])).squeeze()
-
-    
-#     traj[i+1, :] = x_next
-#     if i % 50 == 0:
-#         plot = solver.plot_xy_trajectory(traj[:i+1].T, title=f"MPC Trajectory (step {i+1})", show_wall=True)
-#         # plot = solver.plot_xyz_trajectory(sol["traj_x"], title=f"MPC Trajectory (step {i+1})", show_wall=True)
-#         plot = solver.plot_xyz_trajectory(traj[:i+1].T, title=f"MPC Trajectory (step {i+1})", show_wall=True)
-
-#         plt.show()
+if __name__ == "__main__":
+    solver = QuadOCP()
 
 
+    print(f"Compte g test: {solver.compute_g(np.array([0, -3.5, 0.0, 1.0, 0.0, 0.0, 0.0, 0., 0., 0.0, 0.0, 0.0, 0.0], dtype=np.float64))}")
+    #MPC loop
+    N_max = 2000
+    MPC_frequency = 5 # steps
+    x0 = np.array([3.5, 3.5, 0.0, 1.0, 0.0, 0.0, 0.0, 0., 0., 0.0, 0.0, 0.0, 0.0], dtype=np.float64)
+    solver.compute_g(x0)
+    traj = np.zeros((N_max+1, 13))
+    traj_u = np.zeros((N_max, 4))
+    traj[0, :] = x0
+    for i in range(N_max):
+        print(f"Step {i+1}/{N_max}")
 
-# plot = solver.plot_xy_trajectory(traj.T, title="MPC Trajectory (top-down)", show_wall=True)
-# plt.show()
+        if i % MPC_frequency == 0:
+            sol = solver.solve(traj[i, :])
+            traj_u[i:i+MPC_frequency, :] = (sol["traj_u"][:, :MPC_frequency]).T
 
-# print(f'Last state: {traj[-1, :]}')
+            traj_x = sol["traj_x"]
+            wall_fails = 0
+            if solver.wall_active:
+                for j in range(traj_x.shape[0]):
+                    if solver.wall_fn_single(traj_x[:3, j]) < 0:
+                        print(f"Warning: Trajectory point {j} is violating the wall constraint with value {solver.wall_fn_single(traj_x[:3, j])} at state {traj_x[:3, j]}")
+                        wall_fails += 1
+                if wall_fails == 0:    
+                    print("All trajectory points satisfy the wall constraint.")
+            if solver.cylinders_active:
+                for j_cyl in range(solver.cylinders.shape[0]):
+                    cyl_fails = 0
+                    for j in range(traj_x.shape[0]):
+                        if solver.cylinder_fn_single(solver.cylinders[j_cyl, :2], solver.cylinders[j_cyl, 2], traj_x[:3, j]) < 0:
+                            print(f"Warning: Trajectory point {j} is violating the cylinder {j_cyl} constraint with value {solver.cylinder_fn_single(solver.cylinders[j_cyl, :2], solver.cylinders[j_cyl, 2], traj_x[:3, j])} at state {traj_x[:3, j]}")
+                            cyl_fails += 1
+                    if cyl_fails == 0:
+                        print(f"All trajectory points satisfy the cylinder {j_cyl} constraint.")
+            for j in range(traj_x.shape[0]):
+                if solver.check_room_constraint(traj_x[:3, j]) >= 0:
+                    print(f"Warning: Trajectory point {j} is violating the room boundary constraint.")
+
+        
+        x_next = np.array(solver.rk4_step_fn()(traj[i, :], traj_u[i, :])).squeeze()
+
+        
+        traj[i+1, :] = x_next
+        if i % 50 == 0:
+            plot = solver.plot_xy_trajectory(traj[:i+1].T, title=f"MPC Trajectory (step {i+1})", show_wall=True)
+            # plot = solver.plot_xyz_trajectory(sol["traj_x"], title=f"MPC Trajectory (step {i+1})", show_wall=True)
+            plot = solver.plot_xyz_trajectory(traj[:i+1].T, title=f"MPC Trajectory (step {i+1})", show_wall=True)
+
+            plt.show()
+
+            if solver.compute_l(traj_x[:, -1]) < 0:
+                print("Target reached in MPC solution.")
+                break
+
+
+    plot = solver.plot_xy_trajectory(traj.T, title="MPC Trajectory (top-down)", show_wall=True)
+    plt.show()
+
+    print(f'Last state: {traj[-1, :]}')
 
 
 
-# # print(solver.solve(np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.75, 0.75, 0.0, 0.0, 0.0, 0.0], dtype=np.float64)))
-# # plot = solver.plot_xy_trajectory(solver.solve(np.array([-1.0, -3.5, 0.0, 1.0, 0.0, 0.0, 0.0, 0., 0., 0.0, 0.0, 0.0, 0.0], dtype=np.float64))["traj_x"])
-# # plt.show()
-# # print('solve again')
-# # print(a.solve(np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.75, 0.75, 0.0, 0.0, 0.0, 0.0], dtype=np.float64)))
+    # print(solver.solve(np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.75, 0.75, 0.0, 0.0, 0.0, 0.0], dtype=np.float64)))
+    # plot = solver.plot_xy_trajectory(solver.solve(np.array([-1.0, -3.5, 0.0, 1.0, 0.0, 0.0, 0.0, 0., 0., 0.0, 0.0, 0.0, 0.0], dtype=np.float64))["traj_x"])
+    # plt.show()
+    # print('solve again')
+    # print(a.solve(np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.75, 0.75, 0.0, 0.0, 0.0, 0.0], dtype=np.float64)))

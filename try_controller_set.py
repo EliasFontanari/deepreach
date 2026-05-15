@@ -28,8 +28,8 @@ def get_args():
     args_list = [
         "--mode", "test",
         "--experiment_class", "DeepReach",
-        "--dynamics_class", "QuadrotorReachAvoid",
-        "--experiment_name", "QUADRA6",
+        "--dynamics_class", "QuadrotorReachAvoidTunnel",
+        "--experiment_name", "QUADRATunnelMPC",
         "--minWith", "target",
         "--pretrain",
         "--pretrain_iters", "10000",
@@ -213,7 +213,7 @@ def plot_state(model, device, dynamics, dataslice: np.ndarray, time: float, x_ax
         return values.detach().cpu().numpy()
 
 # val = plot_state(model,'cuda',dynamics_obj,np.array([0,  0,  0,  1., 0,  0, 0, 0, 0, 0, 0.8, 0.8, 0]),0.2,0,1,100,100)
-val2 = plot_state(model,'cuda',dynamics_obj,np.array([0,  0,  0, 0.9063, 0.1604, 0.3753, -0.0660, 0, 0, 0, 0., 0., 0]),0.5,0,1,100,100)
+val2 = plot_state(model,'cuda',dynamics_obj,np.array([0,  0,  0, 1, 0, 0, 0, 0, 0, 0, 0., 0., 0]),1.5,0,1,100,100)
 plt.show()
 
 # verification

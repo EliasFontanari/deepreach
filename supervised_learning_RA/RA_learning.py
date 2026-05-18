@@ -160,7 +160,7 @@ class RALearner:
 		hindsight=10,
 		gamma=0.999999,
 		weight_end=0.0,
-		lr=0.001,
+		lr=0.0001,
 		momentum=0.0,
 		device=None,
 	):
@@ -245,7 +245,8 @@ print("Creating RALearner...")
 learner = RALearner(input_dim=13, queue_len=5000)
 # print("Adding transitions to buffer in batches of 200...")
 
-epochs = 1000
+epochs = 5000
+shuffle_each_epoch = False
 
 batch_size = 256
 n_samples = pairs.shape[0]
@@ -275,7 +276,11 @@ query_grid, grid_shape = generate_query_grid(np.array([0,0,0,1,0,0,0,0,0,0,0,0,0
 
 update_steps = 0
 for ep in tqdm(range(epochs)):
-	# perm = np.random.permutation(n_samples)
+	if shuffle_each_epoch:
+		perm = np.random.permutation(n_samples)
+		epoch_pairs = pairs[perm]
+	else:
+		epoch_pairs = pairs
 	epoch_loss = []
 	# for batch_idx in range(n_batches):
 	# 	start_idx = batch_idx * batch_size
@@ -291,8 +296,8 @@ for ep in tqdm(range(epochs)):
 	# if ep % 5 == 0:
 	# 	print(f"Epoch {ep+1}/{epochs}, Loss: {np.mean(epoch_loss):.6f}")
  
-	for batch_idx in range(0,n_samples,batch_size):
-		batch_states = torch.Tensor(pairs[batch_idx:batch_idx+batch_size]).to(learner.device)
+	for batch_idx in range(0, n_samples, batch_size):
+		batch_states = torch.Tensor(epoch_pairs[batch_idx:batch_idx+batch_size]).to(learner.device)
 		# print(f'Loss: {learner.update(batch_states):.6f}')
 		epoch_loss.append(learner.update(batch_states))
 		update_steps += 1
@@ -322,7 +327,10 @@ for ep in tqdm(range(epochs)):
 		# plt.grid(True)
 		# plt.savefig(f"V_net.png")
 		plot_V_XY(grid_values, log_learning=False)
-		plt.savefig(f"V_net_quad.png")
+		if shuffle_each_epoch:
+			plt.savefig(f"V_net_quad_shuffle.png")
+		else:
+			plt.savefig(f"V_net_quad_no_shuffle.png")
 		# with torch.no_grad():
 		# 	query_state = torch.Tensor(np.array([[-4, 4, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]])).to(learner.device)
 		# 	print(f'Value in center (0,0): {learner.model(query_state).cpu().numpy()}')

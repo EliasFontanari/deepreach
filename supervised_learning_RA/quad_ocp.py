@@ -180,7 +180,7 @@ class QuadOCP:
     def compute_l(self, state):
         pos_const = np.linalg.norm(state[:3] - self.target_pos)
         target_abs_max = np.max(np.abs(state[self.index_target]))
-        raw_l = max(pos_const - 0.15, target_abs_max - 0.1)
+        raw_l = max(pos_const - 0.2, target_abs_max - 0.1)
         return np.tanh(raw_l / self.l_scale)
     
     def compute_g(self, state):
@@ -192,9 +192,11 @@ class QuadOCP:
             for j_cyl in range(self.cylinders.shape[0]):
                 cyl_constr = -self.cylinder_fn_single(self.cylinders[j_cyl, :2], self.cylinders[j_cyl, 2], state[:3])
                 if cyl_constr >= 1e-3:
+                    print(f'cylinder fail')
                     return 1
         room_constr = self.check_room_constraint(state[:3])
         if room_constr >= 0:
+            print(f'room fail')
             return 1
         return -1
 
@@ -243,7 +245,7 @@ class QuadOCP:
         opti.subject_to(X[2, :] >= self.state_range[2, 0] - soft_flag * s_pos_low[2, :] + self.drone_radius)
         opti.subject_to(X[2, :] <= self.state_range[2, 1] + soft_flag * s_pos_up[2, :] - self.drone_radius)
 
-        opti.subject_to(U[0, :] >= -self.u_max[0])
+        opti.subject_to(U[0, :] >= 0)
         opti.subject_to(U[0, :] <= self.u_max[0])
         opti.subject_to(U[1, :] >= -self.u_max[1])
         opti.subject_to(U[1, :] <= self.u_max[1])
@@ -445,14 +447,18 @@ if __name__ == "__main__":
     print(f"Compte g test: {solver.compute_g(np.array([0, -3.5, 0.0, 1.0, 0.0, 0.0, 0.0, 0., 0., 0.0, 0.0, 0.0, 0.0], dtype=np.float64))}")
     #MPC loop
     N_max = 2000
-    MPC_frequency = 5 # steps
-    x0 = np.array([3.5, 3.5, 0.0, 1.0, 0.0, 0.0, 0.0, 0., 0., 0.0, 0.0, 0.0, 0.0], dtype=np.float64)
+    MPC_frequency = 10 # steps
+    x0 = np.array([-3.7, 3.7, 0.0, 1.0, 0.0, 0.0, 0.0, 0., 0., 0.0, 0.0, 0.0, 0.0], dtype=np.float64)
+    # x0 = np.array([0.36829686, 3.53152368, -0.75706301, -0.28332137, 0.65517484, 0.69473076,
+    #                0.08845391, 1.08366195, 2.41618241, -2.22849583, -0.78087271, -2.29923304,
+    #                1.72612237], dtype=np.float64)
     solver.compute_g(x0)
     traj = np.zeros((N_max+1, 13))
     traj_u = np.zeros((N_max, 4))
     traj[0, :] = x0
     for i in range(N_max):
-        print(f"Step {i+1}/{N_max}")
+        if i > 0:
+            print(f"Step {i+1}/{N_max}, l_reaching {solver.compute_l(x_next) } state {x_next} last u {traj_u[i-1, :]}")
 
         if i % MPC_frequency == 0:
             sol = solver.solve(traj[i, :])
@@ -482,19 +488,24 @@ if __name__ == "__main__":
 
         
         x_next = np.array(solver.rk4_step_fn()(traj[i, :], traj_u[i, :])).squeeze()
+        
+        # if solver.compute_l(x_next) < 0:
+        #     print(f"Target reached at step {i+1} in MPC solution.")
+        #     traj[i+1, :] = x_next
+        #     break
 
         
         traj[i+1, :] = x_next
-        if i % 50 == 0:
-            plot = solver.plot_xy_trajectory(traj[:i+1].T, title=f"MPC Trajectory (step {i+1})", show_wall=True)
-            # plot = solver.plot_xyz_trajectory(sol["traj_x"], title=f"MPC Trajectory (step {i+1})", show_wall=True)
-            plot = solver.plot_xyz_trajectory(traj[:i+1].T, title=f"MPC Trajectory (step {i+1})", show_wall=True)
+        # if i % 50 == 0:
+        #     plot = solver.plot_xy_trajectory(traj[:i+1].T, title=f"MPC Trajectory (step {i+1})", show_wall=True)
+        #     # plot = solver.plot_xyz_trajectory(sol["traj_x"], title=f"MPC Trajectory (step {i+1})", show_wall=True)
+        #     plot = solver.plot_xyz_trajectory(traj[:i+1].T, title=f"MPC Trajectory (step {i+1})", show_wall=True)
 
-            plt.show()
+        #     plt.show()
 
-            if solver.compute_l(traj_x[:, -1]) < 0:
-                print("Target reached in MPC solution.")
-                break
+        #     if solver.compute_l(traj_x[:, -1]) < 0:
+        #         print("Target reached in MPC solution.")
+        #         break
 
 
     plot = solver.plot_xy_trajectory(traj.T, title="MPC Trajectory (top-down)", show_wall=True)

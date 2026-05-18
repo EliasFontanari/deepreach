@@ -7,10 +7,10 @@ from quad_ocp import QuadOCP
 import matplotlib.pyplot as plt
 import tqdm as tqdm
 import pickle
-n_episodes = 10000
+n_episodes = 80000
 MPC_frequency = 10
 T_tot = 7.5
-n_workers = 7
+n_workers = 6
 
 def generate_pairs(data):
     """
@@ -57,12 +57,14 @@ def rollout_episode(episode_idx, seed):
         if g_s >= 0.0:
             for j in range(min(10, i)):
                 rollout_states[-j][-1] = 1 - 0.2 * j
+            print(f"Episode {episode_idx}: Violation at step {i}, state: {rollout_states[-1]}")
             return {
                 "pairs": generate_pairs(np.array(rollout_states)),
                 "success": False,
                 "episode_length": i,
             }
         if rollout_states[-1][-2] < 0 and not success:
+            print(f"Episode {episode_idx}: Success at step {i}, state: {rollout_states[-1]}")
             success = True
             return {
             "pairs": generate_pairs(np.array(rollout_states)),
@@ -100,10 +102,11 @@ def main():
             else:
                 failures += 1
 
-    x_traj = np.concatenate([r["pairs"] for r in results], axis=0)
+    print(f'Lengths of results: {len(results)}')
+    x_traj = np.concatenate([r["pairs"] for r in results if r["pairs"].shape[0] > 0], axis=0)
     # x_traj = [r['pairs'] for r in results if r['pairs'].shape[0] > 0]
 
-
+    
     # pickle.dump(x_traj, open("quad_samples_pairs.pkl", "wb"))
     
     episodes_lengths = [r["episode_length"] for r in results]

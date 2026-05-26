@@ -100,13 +100,15 @@ def plot_V_XY(grid_values, log_learning):
 	)
 
 class RAValueFunction(nn.Module):
-	def __init__(self, input_dim=1, hidden_dim=256):
+	def __init__(self, input_dim=1, hidden_dim=256, dropout=0.15):
 		super().__init__()
 		self.net = nn.Sequential(
 			nn.Linear(input_dim, hidden_dim),
 			nn.ReLU(),
+			nn.Dropout(p=dropout),   # dropout
 			nn.Linear(hidden_dim, hidden_dim),
 			nn.ReLU(),
+			nn.Dropout(p=dropout),   # dropout
 			nn.Linear(hidden_dim, hidden_dim),
 			nn.ReLU(),
 			nn.Linear(hidden_dim, 1),
@@ -160,7 +162,7 @@ class RALearner:
 		hindsight=10,
 		gamma=0.999999,
 		weight_end=0.0,
-		lr=0.0001,
+		lr=0.0005,
 		momentum=0.0,
 		device=None,
 	):
@@ -248,7 +250,7 @@ learner = RALearner(input_dim=13, queue_len=5000)
 epochs = 5000
 shuffle_each_epoch = False
 
-batch_size = 256
+batch_size = 4096
 n_samples = pairs.shape[0]
 n_batches = (n_samples + batch_size - 1) // batch_size
 
@@ -318,10 +320,12 @@ for ep in tqdm(range(epochs)):
 	# 	learner.update_target()
 
 	if ep % 5 == 0:
+		learner.model.eval()
 		with torch.no_grad():
 			grid_values = learner.model(torch.Tensor(query_grid).to(learner.device)).cpu().numpy().reshape(grid_shape)
 			# grid_values = learner.model(query_space.unsqueeze(1)).cpu().numpy().flatten()
 			# print('grid_values:', query_space.unsqueeze(1))
+		learner.model.train()
 		# plt.figure(figsize=(6, 6))
 		# plt.plot(query_space.cpu().numpy(), grid_values, label='Learned V')
 		# plt.grid(True)
@@ -329,12 +333,14 @@ for ep in tqdm(range(epochs)):
 		plot_V_XY(grid_values, log_learning=False)
 		if shuffle_each_epoch:
 			plt.savefig(f"V_net_quad_shuffle.png")
+			torch.save(learner.model.state_dict(), "ra_value_function_shuffle.pth")
 		else:
 			plt.savefig(f"V_net_quad_no_shuffle.png")
+			torch.save(learner.model.state_dict(), "ra_value_function_no_shuffle.pth")
+
 		# with torch.no_grad():
 		# 	query_state = torch.Tensor(np.array([[-4, 4, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]])).to(learner.device)
 		# 	print(f'Value in center (0,0): {learner.model(query_state).cpu().numpy()}')
 		
 # print(f"\nTraining complete. Final buffer size: {len(learner.buffer)}")
-torch.save(learner.model.state_dict(), "ra_value_function.pth")
 print("Model saved to ra_value_function.pth")

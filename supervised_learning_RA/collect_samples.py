@@ -9,8 +9,8 @@ import tqdm as tqdm
 import pickle
 n_episodes = 80000
 MPC_frequency = 10
-T_tot = 7.5
-n_workers = 6
+T_tot = 10
+n_workers = 4
 
 def generate_pairs(data):
     """

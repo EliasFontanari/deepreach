@@ -34,7 +34,7 @@ class QuadOCP:
         self.CT = CT
         self.CM = CM
         self.Gz = Gz
-        self.drone_radius = 0.15
+        self.drone_radius = 0.12
         self.dwx_max = dwx_max
         self.dwy_max = dwy_max
         self.dwz_max = dwz_max
@@ -85,8 +85,8 @@ class QuadOCP:
         self.wall_active = False
         self.cylinders_active = True
 
-        self.cylinders = np.array([[0,2,1.5], 
-                                  [0,-2, 1.5]])
+        self.cylinders = np.array([[0,2,1.2], 
+                                  [0,-2, 1.2]])
 
         self.N = int(self.T_max / self.dt)
         self.opti, self.X, self.U, self.x_init_param = self._build_opti()
@@ -448,7 +448,9 @@ if __name__ == "__main__":
     #MPC loop
     N_max = 2000
     MPC_frequency = 10 # steps
-    x0 = np.array([-3.7, 3.7, 0.0, 1.0, 0.0, 0.0, 0.0, 0., 0., 0.0, 0.0, 0.0, 0.0], dtype=np.float64)
+    x0 = np.array([0.50677361, -3.54062472, -2.34912985, 0.71139237, -0.13570943, 0.68732024,
+                   0.05563031, 0.45007205, 2.64777957, 0.34814984, 0.85367792, 0.19473124,
+                   0.51528444], dtype=np.float64)
     # x0 = np.array([0.36829686, 3.53152368, -0.75706301, -0.28332137, 0.65517484, 0.69473076,
     #                0.08845391, 1.08366195, 2.41618241, -2.22849583, -0.78087271, -2.29923304,
     #                1.72612237], dtype=np.float64)

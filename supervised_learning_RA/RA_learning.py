@@ -104,13 +104,13 @@ class RAValueFunction(nn.Module):
 		super().__init__()
 		self.net = nn.Sequential(
 			nn.Linear(input_dim, hidden_dim),
-			nn.ReLU(),
+			nn.GELU(),
 			nn.Dropout(p=dropout),   # dropout
 			nn.Linear(hidden_dim, hidden_dim),
-			nn.ReLU(),
+			nn.GELU(),
 			nn.Dropout(p=dropout),   # dropout
 			nn.Linear(hidden_dim, hidden_dim),
-			nn.ReLU(),
+			nn.GELU(),
 			nn.Linear(hidden_dim, 1),
 			nn.Tanh(),
 		)
@@ -213,134 +213,135 @@ class RALearner:
 				g_s, torch.min(l_s, self.target_model(next_state))
 			) + (1.0 - self.gamma) * torch.max(l_s, g_s)
 		return targets
-
-scale_l = 0.5	
-pairs = np.load("data_generation/training_data_interrupted_different_n1.npy")
-pairs = np.load("quad_samples_pairs.npy")
-# pairs = pickle.load(open("quad_samples_pairs.pkl", "rb"))
-# for pair in pairs:
-# 	pair[:, -2] = np.tanh(pair[:, -2]/scale_l) 
-
-# # histogram of the last column of pairs (the violated column)
-# plt.figure(figsize=(6, 4))
-# plt.hist(pairs[:, -1], bins=20, edgecolor='black')
-# plt.title('Histogram of Violated Column in Pairs')
-# plt.xlabel('Violated Value')
-# plt.ylabel('Frequency')
-# plt.grid(axis='y', alpha=0.75)
-
-# # histogram of the second to last column of pairs (the reached column)
-# plt.figure(figsize=(6, 4))
-# plt.hist(pairs[:, -2], range=(-100, 0), bins=20, edgecolor='black')
-# plt.title('Histogram of Reached Column in Pairs')
-# plt.xlabel('Reached Value')
-# plt.ylabel('Frequency')
-# plt.grid(axis='y', alpha=0.75)	
-
-# plt.show()
-
-# print("Loaded samples:", sum([pair.shape[0] for pair in pairs]))
-print("Loaded pairs shape:", pairs.shape)
-
-print("Creating RALearner...")
-
-learner = RALearner(input_dim=13, queue_len=5000)
-# print("Adding transitions to buffer in batches of 200...")
-
-epochs = 5000
-shuffle_each_epoch = False
-
-batch_size = 4096
-n_samples = pairs.shape[0]
-n_batches = (n_samples + batch_size - 1) // batch_size
-
-query_grid, grid_shape = generate_query_grid(np.array([0,0,0,1,0,0,0,0,0,0,0,0,0]))
-
-# query_space = torch.Tensor(np.linspace(-2.2,2.2,100)).to(learner.device)
-
-# #search episode with succecsful transitions and print the target values for the first batch of pairs
-# for i, pair in enumerate(pairs):
-# 	successful_transitions = pair[pair[:,-2] < 0]
-# 	if successful_transitions.shape[0] > 0:
-# 		print("Example successful transitions found, at episode {}. Target values for the first batch:".format(i))
-# 		print(learner.compute_V_target(torch.Tensor(successful_transitions[:,13+2:-2]).to(learner.device), torch.Tensor(successful_transitions[:,-2].reshape(-1,1)).to(learner.device), torch.Tensor(successful_transitions[:,-1].reshape(-1,1)).to(learner.device)).cpu().numpy().flatten())
-# 		break
-
-# # plot trajectory of the first episode with successful transitions
-# plt.figure(figsize=(6, 6))
-# plt.plot(pairs[i][:,0], pairs[i][:,1], marker='o', markersize=3, label='Trajectory')
-# plt.title('Trajectory of First Episode with Successful Transitions')
-# plt.xlabel('x')
-# plt.ylabel('y')
-# plt.grid()
-# plt.legend()
-# plt.show()
-
-update_steps = 0
-for ep in tqdm(range(epochs)):
-	if shuffle_each_epoch:
-		perm = np.random.permutation(n_samples)
-		epoch_pairs = pairs[perm]
-	else:
-		epoch_pairs = pairs
-	epoch_loss = []
-	# for batch_idx in range(n_batches):
-	# 	start_idx = batch_idx * batch_size
-	# 	end_idx = min(start_idx + batch_size, n_samples)
-	# 	batch_indices = perm[start_idx:end_idx]
-
-	# 	batch_states = torch.Tensor(pairs[batch_indices]).to(learner.device)
-	# 	# print(f'Loss: {learner.update(batch_states):.6f}')
-	# 	epoch_loss.append(learner.update(batch_states))
-	# 	update_steps += 1
-	# 	if update_steps % 20 == 0:
-	# 		learner.update_target()
-	# if ep % 5 == 0:
-	# 	print(f"Epoch {ep+1}/{epochs}, Loss: {np.mean(epoch_loss):.6f}")
- 
-	for batch_idx in range(0, n_samples, batch_size):
-		batch_states = torch.Tensor(epoch_pairs[batch_idx:batch_idx+batch_size]).to(learner.device)
-		# print(f'Loss: {learner.update(batch_states):.6f}')
-		epoch_loss.append(learner.update(batch_states))
-		update_steps += 1
-		if update_steps % 20 == 0:
-			learner.update_target()
-	if ep % 5 == 0:
-		print(f"Epoch {ep+1}/{epochs}, Loss: {np.mean(epoch_loss):.6f}")
 	
+if __name__ == 'main':
+	scale_l = 0.5	
+	pairs = np.load("data_generation/training_data_interrupted_different_n1.npy")
+	pairs = np.load("quad_samples_pairs.npy")
+	# pairs = pickle.load(open("quad_samples_pairs.pkl", "rb"))
+	# for pair in pairs:
+	# 	pair[:, -2] = np.tanh(pair[:, -2]/scale_l) 
+
+	# # histogram of the last column of pairs (the violated column)
+	# plt.figure(figsize=(6, 4))
+	# plt.hist(pairs[:, -1], bins=20, edgecolor='black')
+	# plt.title('Histogram of Violated Column in Pairs')
+	# plt.xlabel('Violated Value')
+	# plt.ylabel('Frequency')
+	# plt.grid(axis='y', alpha=0.75)
+
+	# # histogram of the second to last column of pairs (the reached column)
+	# plt.figure(figsize=(6, 4))
+	# plt.hist(pairs[:, -2], range=(-100, 0), bins=20, edgecolor='black')
+	# plt.title('Histogram of Reached Column in Pairs')
+	# plt.xlabel('Reached Value')
+	# plt.ylabel('Frequency')
+	# plt.grid(axis='y', alpha=0.75)	
+
+	# plt.show()
+
+	# print("Loaded samples:", sum([pair.shape[0] for pair in pairs]))
+	print("Loaded pairs shape:", pairs.shape)
+
+	print("Creating RALearner...")
+
+	learner = RALearner(input_dim=13, queue_len=5000)
+	# print("Adding transitions to buffer in batches of 200...")
+
+	epochs = 5000
+	shuffle_each_epoch = True
+
+	batch_size = 4096
+	n_samples = pairs.shape[0]
+	n_batches = (n_samples + batch_size - 1) // batch_size
+
+	query_grid, grid_shape = generate_query_grid(np.array([0,0,0,1,0,0,0,0,0,0,0,0,0]))
+
+	# query_space = torch.Tensor(np.linspace(-2.2,2.2,100)).to(learner.device)
+
+	# #search episode with succecsful transitions and print the target values for the first batch of pairs
 	# for i, pair in enumerate(pairs):
-	# 	losses = []
-	# 	batch_states = torch.Tensor(pair).to(learner.device)	
-	# 	if i == 4:
-	# 		print(pair[:,-2])
-	# 		print(f"Target values: {learner.compute_V_target(batch_states[:,13+2:-2], batch_states[:,-2].unsqueeze(1), batch_states[:,-1].unsqueeze(1)).cpu().numpy().flatten()}") 
-	# 	losses.append(learner.update(batch_states))
-	# print(f"Epoch {ep+1}/{epochs}, Loss: {np.mean(losses):.6f}")
-	# if ep % 10 == 0:
-	# 	learner.update_target()
+	# 	successful_transitions = pair[pair[:,-2] < 0]
+	# 	if successful_transitions.shape[0] > 0:
+	# 		print("Example successful transitions found, at episode {}. Target values for the first batch:".format(i))
+	# 		print(learner.compute_V_target(torch.Tensor(successful_transitions[:,13+2:-2]).to(learner.device), torch.Tensor(successful_transitions[:,-2].reshape(-1,1)).to(learner.device), torch.Tensor(successful_transitions[:,-1].reshape(-1,1)).to(learner.device)).cpu().numpy().flatten())
+	# 		break
 
-	if ep % 5 == 0:
-		learner.model.eval()
-		with torch.no_grad():
-			grid_values = learner.model(torch.Tensor(query_grid).to(learner.device)).cpu().numpy().reshape(grid_shape)
-			# grid_values = learner.model(query_space.unsqueeze(1)).cpu().numpy().flatten()
-			# print('grid_values:', query_space.unsqueeze(1))
-		learner.model.train()
-		# plt.figure(figsize=(6, 6))
-		# plt.plot(query_space.cpu().numpy(), grid_values, label='Learned V')
-		# plt.grid(True)
-		# plt.savefig(f"V_net.png")
-		plot_V_XY(grid_values, log_learning=False)
+	# # plot trajectory of the first episode with successful transitions
+	# plt.figure(figsize=(6, 6))
+	# plt.plot(pairs[i][:,0], pairs[i][:,1], marker='o', markersize=3, label='Trajectory')
+	# plt.title('Trajectory of First Episode with Successful Transitions')
+	# plt.xlabel('x')
+	# plt.ylabel('y')
+	# plt.grid()
+	# plt.legend()
+	# plt.show()
+
+	update_steps = 0
+	for ep in tqdm(range(epochs)):
 		if shuffle_each_epoch:
-			plt.savefig(f"V_net_quad_shuffle.png")
-			torch.save(learner.model.state_dict(), "ra_value_function_shuffle.pth")
+			perm = np.random.permutation(n_samples)
+			epoch_pairs = pairs[perm]
 		else:
-			plt.savefig(f"V_net_quad_no_shuffle.png")
-			torch.save(learner.model.state_dict(), "ra_value_function_no_shuffle.pth")
+			epoch_pairs = pairs
+		epoch_loss = []
+		# for batch_idx in range(n_batches):
+		# 	start_idx = batch_idx * batch_size
+		# 	end_idx = min(start_idx + batch_size, n_samples)
+		# 	batch_indices = perm[start_idx:end_idx]
 
-		# with torch.no_grad():
-		# 	query_state = torch.Tensor(np.array([[-4, 4, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]])).to(learner.device)
-		# 	print(f'Value in center (0,0): {learner.model(query_state).cpu().numpy()}')
+		# 	batch_states = torch.Tensor(pairs[batch_indices]).to(learner.device)
+		# 	# print(f'Loss: {learner.update(batch_states):.6f}')
+		# 	epoch_loss.append(learner.update(batch_states))
+		# 	update_steps += 1
+		# 	if update_steps % 20 == 0:
+		# 		learner.update_target()
+		# if ep % 5 == 0:
+		# 	print(f"Epoch {ep+1}/{epochs}, Loss: {np.mean(epoch_loss):.6f}")
+	
+		for batch_idx in range(0, n_samples, batch_size):
+			batch_states = torch.Tensor(epoch_pairs[batch_idx:batch_idx+batch_size]).to(learner.device)
+			# print(f'Loss: {learner.update(batch_states):.6f}')
+			epoch_loss.append(learner.update(batch_states))
+			update_steps += 1
+			if update_steps % 20 == 0:
+				learner.update_target()
+		if ep % 5 == 0:
+			print(f"Epoch {ep+1}/{epochs}, Loss: {np.mean(epoch_loss):.6f}")
 		
-# print(f"\nTraining complete. Final buffer size: {len(learner.buffer)}")
-print("Model saved to ra_value_function.pth")
+		# for i, pair in enumerate(pairs):
+		# 	losses = []
+		# 	batch_states = torch.Tensor(pair).to(learner.device)	
+		# 	if i == 4:
+		# 		print(pair[:,-2])
+		# 		print(f"Target values: {learner.compute_V_target(batch_states[:,13+2:-2], batch_states[:,-2].unsqueeze(1), batch_states[:,-1].unsqueeze(1)).cpu().numpy().flatten()}") 
+		# 	losses.append(learner.update(batch_states))
+		# print(f"Epoch {ep+1}/{epochs}, Loss: {np.mean(losses):.6f}")
+		# if ep % 10 == 0:
+		# 	learner.update_target()
+
+		if ep % 5 == 0:
+			learner.model.eval()
+			with torch.no_grad():
+				grid_values = learner.model(torch.Tensor(query_grid).to(learner.device)).cpu().numpy().reshape(grid_shape)
+				# grid_values = learner.model(query_space.unsqueeze(1)).cpu().numpy().flatten()
+				# print('grid_values:', query_space.unsqueeze(1))
+			learner.model.train()
+			# plt.figure(figsize=(6, 6))
+			# plt.plot(query_space.cpu().numpy(), grid_values, label='Learned V')
+			# plt.grid(True)
+			# plt.savefig(f"V_net.png")
+			plot_V_XY(grid_values, log_learning=False)
+			if shuffle_each_epoch:
+				plt.savefig(f"V_net_quad_shuffle.png")
+				torch.save(learner.model.state_dict(), "ra_value_function_shuffle.pth")
+			else:
+				plt.savefig(f"V_net_quad_no_shuffle.png")
+				torch.save(learner.model.state_dict(), "ra_value_function_no_shuffle.pth")
+
+			# with torch.no_grad():
+			# 	query_state = torch.Tensor(np.array([[-4, 4, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]])).to(learner.device)
+			# 	print(f'Value in center (0,0): {learner.model(query_state).cpu().numpy()}')
+			
+	# print(f"\nTraining complete. Final buffer size: {len(learner.buffer)}")
+	print("Model saved to ra_value_function.pth")

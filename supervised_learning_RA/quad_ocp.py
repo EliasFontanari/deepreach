@@ -301,7 +301,8 @@ class QuadOCP:
         else:
             opts = {}
 
-        opti.solver(self.solver_name, opts)
+        # opti.solver(self.solver_name, opts)
+        opti.solver('fatrop', {'structure_detection':'manual', 'nx': nx, 'nu':nu, 'ng':ng, 'N':K-1, "expand": True, "fatrop.mu_init":1e-1, "jit":True, "fatrop.print_level":10, "jit_options": {"flags": "-O3", "verbose": True}})
 
         return opti, X, U, x_init_param
 

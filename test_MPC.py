@@ -270,7 +270,7 @@ dataset = dataio.ReachabilityDataset(
     time_till_refinement=opt.time_till_refinement,num_MPC_batches=opt.num_MPC_batches,
     aug_with_MPC_data= opt.aug_with_MPC_data, policy=None, refine_dataset=(not opt.not_refine_dataset))
 # mpc_module = MPC.MPC(horizon=None, receding_horizon=opt.MPC_receding_horizon, dT=opt.MPC_dt, num_samples=opt.num_MPC_perturbation_samples,
-#                            dynamics_=opt.dynamics, device='cuda', mode=opt.MPC_mode,
+#                            dynamics_=opt.dynamics, device='cuda:1', mode=opt.MPC_mode,
 #                            sample_mode=opt.MPC_sample_mode, lambda_=opt.MPC_lambda_, style=opt.MPC_style, num_iterative_refinement=opt.num_iterative_refinement)
 
 print(f'MPC TEST')

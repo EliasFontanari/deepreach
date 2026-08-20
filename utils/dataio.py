@@ -126,9 +126,9 @@ class ReachabilityDataset(Dataset):
     def generate_MPC_dataset(self, T, t, style="random"):
         print("Generating MPC dataset")
         self.mpc = MPC.MPC(horizon=None, receding_horizon=self.MPC_receding_horizon, dT=self.MPC_dt, num_samples=self.num_MPC_perturbation_samples,
-                           dynamics_=self.dynamics, device='cuda', mode=self.MPC_mode,
+                           dynamics_=self.dynamics, device='cuda:1', mode=self.MPC_mode,
                            sample_mode=self.MPC_sample_mode, lambda_=self.MPC_lambda_, style=self.MPC_style, num_iterative_refinement=self.num_iterative_refinement)
-        device = 'cuda'
+        device = 'cuda:1'
         MPC_states = self.sample_init_state()
 
         # if hasattr(self, 'MPC_values'):
@@ -139,7 +139,7 @@ class ReachabilityDataset(Dataset):
         #     torch.cuda.empty_cache()
         #     print('DELETED')
         _, _, MPC_inputs, MPC_values = self.mpc.get_batch_data(
-            MPC_states.cuda(), T, self.policy, t=t)  # Make sure to generate at least one batch of data at T, so we have "look-ahead" MPC labels for deepreach
+            MPC_states.cuda(1), T, self.policy, t=t)  # Make sure to generate at least one batch of data at T, so we have "look-ahead" MPC labels for deepreach
         for i in tqdm(range(self.num_MPC_batches-1)):
             MPC_states = self.sample_init_state()
 
@@ -195,16 +195,16 @@ class ReachabilityDataset(Dataset):
     def get_MPC_traj(self, T, t, style="random"):
         print("Generating MPC dataset")
         self.mpc = MPC.MPC(horizon=None, receding_horizon=self.MPC_receding_horizon, dT=self.MPC_dt, num_samples=self.num_MPC_perturbation_samples,
-                           dynamics_=self.dynamics, device='cuda', mode=self.MPC_mode,
+                           dynamics_=self.dynamics, device='cuda:1', mode=self.MPC_mode,
                            sample_mode=self.MPC_sample_mode, lambda_=self.MPC_lambda_, style=self.MPC_style, num_iterative_refinement=self.num_iterative_refinement)
-        device = 'cuda'
+        device = 'cuda:1'
         MPC_states = self.sample_init_state()
         
         # state_test = torch.tensor([3.3,3.6,0,1,0,0,0,0.,0,0,0,0,0])
         # MPC_states[:] = state_test.to(MPC_states.device)
         
         costs, traj, MPC_inputs, MPC_values = self.mpc.get_batch_data(
-            MPC_states.cuda(), T, self.policy, t=t)  # Make sure to generate at least one batch of data at T, so we have "look-ahead" MPC labels for deepreach
+            MPC_states.cuda(1), T, self.policy, t=t)  # Make sure to generate at least one batch of data at T, so we have "look-ahead" MPC labels for deepreach
         for i in tqdm(range(self.num_MPC_batches-1)):
             MPC_states = self.sample_init_state()
 

@@ -15,15 +15,6 @@ from utils import modules, dataio, losses
 
 import matplotlib.pyplot as plt
 
-# import sys
-# sys.argv = [
-#    '--mode', 'train',
-#    '--experiment_class', 'DeepReach',
-#    '--experiment_name', 'QUADRA',
-#    '--dynamics_class','QuadrotorReachAvoid'
-
-# ]
-
 def get_args():
     args_list = [
         "--mode", "test",
@@ -147,7 +138,7 @@ dynamics_obj.deepReach_model=orig_opt.deepReach_model
 
 model = modules.SingleBVPNet(in_features=dynamics_obj.input_dim, out_features=1, type=orig_opt.model, mode=orig_opt.model_mode,
                              final_layer_factor=1., hidden_features=orig_opt.num_nl, num_hidden_layers=orig_opt.num_hl, periodic_transform_fn=dynamics_obj.periodic_transform_fn)
-model.to('cuda')
+model.to('cuda:1')
 
 # checkpoint = experiment_dir + '/training/checkpoints/model_epoch_700000.pth'
 checkpoint = experiment_dir + '/training/checkpoints/model_final.pth'
@@ -212,8 +203,8 @@ def plot_state(model, device, dynamics, dataslice: np.ndarray, time: float, x_ax
 
         return values.detach().cpu().numpy()
 
-# val = plot_state(model,'cuda',dynamics_obj,np.array([0,  0,  0,  1., 0,  0, 0, 0, 0, 0, 0.8, 0.8, 0]),0.2,0,1,100,100)
-val2 = plot_state(model,'cuda',dynamics_obj,np.array([0,  0,  0, 1, 0, 0, 0, 0, 0, 0, 0., 0., 0]),1.5,0,1,100,100)
+# val = plot_state(model,'cuda:1',dynamics_obj,np.array([0,  0,  0,  1., 0,  0, 0, 0, 0, 0, 0.8, 0.8, 0]),0.2,0,1,100,100)
+val2 = plot_state(model,'cuda:1',dynamics_obj,np.array([0,  0,  0, 1, 0, 0, 0, 0, 0, 0, 0., 0., 0]),1.5,0,1,100,100)
 plt.show()
 
 # verification
@@ -234,7 +225,7 @@ plt.show()
 #     coord[0,0] = time
 #     coord[0,1:] = state
 #     with torch.no_grad():
-#         model_result = model({'coords': dynamics_obj.coord_to_input(coord.to('cuda'))})
+#         model_result = model({'coords': dynamics_obj.coord_to_input(coord.to('cuda:1'))})
 #         value = dynamics_obj.io_to_value(model_result['model_in'].detach(), model_result['model_out'].squeeze(dim=-1).detach())
 #     if bool(value < 0): print(f'State {state} value {value}')
 
@@ -247,14 +238,14 @@ coord = torch.zeros(1, dynamics_obj.state_dim + 1)
 coord[0,0] = t_max
 coord[0,1:] = state
 with torch.no_grad():
-    model_result = model({'coords': dynamics_obj.coord_to_input(coord.to('cuda'))})
+    model_result = model({'coords': dynamics_obj.coord_to_input(coord.to('cuda:1'))})
     value = dynamics_obj.io_to_value(model_result['model_in'].detach(), model_result['model_out'].squeeze(dim=-1).detach())
 print(f'State {state} value {value}')
 # coord = torch.zeros(1, dynamics_obj.state_dim + 1)
 # coord[0,0] = time
 # coord[0,1:] = state
 # with torch.no_grad():
-#     model_result = model({'coords': dynamics_obj.coord_to_input(coord.to('cuda'))})
+#     model_result = model({'coords': dynamics_obj.coord_to_input(coord.to('cuda:1'))})
 #     value = dynamics_obj.io_to_value(model_result['model_in'].detach(), model_result['model_out'].squeeze(dim=-1).detach())
 # print(f'State {state} value {value}')
 # simulation 
@@ -263,7 +254,7 @@ n_step = int(t_max/dt)
 traj = torch.zeros(n_step+1,dynamics_obj.state_dim)
 traj_u = torch.zeros(n_step,dynamics_obj.control_dim)
 traj[0] = state
-device = 'cuda'
+device = 'cuda:1'
 time = t_max
 time_vec = np.arange(int(time/dt))*dt
 for i in range(n_step):
@@ -420,7 +411,7 @@ for i in range(states_to_sample):
         coord[0,0] = time
         coord[0,1:] = state
         with torch.no_grad():
-            model_result = model({'coords': dynamics_obj.coord_to_input(coord.to('cuda'))})
+            model_result = model({'coords': dynamics_obj.coord_to_input(coord.to('cuda:1'))})
             value = dynamics_obj.io_to_value(model_result['model_in'].detach(), model_result['model_out'].squeeze(dim=-1).detach())
         if bool(value < 0): 
             print(f'State {state} value {value}')

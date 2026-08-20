@@ -103,9 +103,9 @@ class Experiment(ABC):
                 for step, (model_input, gt) in enumerate(train_dataloader):
                     start_time = time.time()
 
-                    model_input = {key: value.cuda()
+                    model_input = {key: value.cuda(1)
                                    for key, value in model_input.items()}
-                    gt = {key: value.cuda() for key, value in gt.items()}
+                    gt = {key: value.cuda(1) for key, value in gt.items()}
 
                     model_results = self.model(
                         {'coords': model_input['model_inputs']})
@@ -128,7 +128,7 @@ class Experiment(ABC):
                             MPC_results['model_in'].detach(), MPC_results['model_out'].squeeze(dim=-1))
    
                     else:
-                        MPC_values=torch.Tensor([0]).cuda()
+                        MPC_values=torch.Tensor([0]).cuda(1)
                         
 
                     # Compute losses
@@ -208,8 +208,8 @@ class Experiment(ABC):
                         'optimizer': self.optim.state_dict()}
                     torch.save(checkpoint,
                                os.path.join(checkpoints_dir, 'model_epoch_%04d.pth' % (epoch+1)))
-                    np.savetxt(os.path.join(checkpoints_dir, 'train_losses_epoch_%04d.txt' % (epoch+1)),
-                               np.array(train_losses))
+                    # np.savetxt(os.path.join(checkpoints_dir, 'train_losses_epoch_%04d.txt' % (epoch+1)),
+                    #            np.array(train_losses))
                     self.validate(
                         epoch=epoch+1, save_path=os.path.join(checkpoints_dir, 'BRS_validation_plot_epoch_%04d.png' % (epoch+1)),
                         x_resolution=val_x_resolution, y_resolution=val_y_resolution, z_resolution=val_z_resolution, time_resolution=val_time_resolution)
@@ -422,8 +422,8 @@ class Experiment(ABC):
 
             
             if data_step == "eval_w_gt":
-                coords=torch.load(os.path.join(gt_data_path,"coords.pt")).cuda()
-                gt_values=torch.load(os.path.join(gt_data_path,"gt_values.pt")).cuda()
+                coords=torch.load(os.path.join(gt_data_path,"coords.pt")).cuda(1)
+                gt_values=torch.load(os.path.join(gt_data_path,"gt_values.pt")).cuda(1)
                 with torch.no_grad():
                     results = model(
                         {'coords': self.dataset.dynamics.coord_to_input(coords)})
@@ -819,7 +819,7 @@ class Experiment(ABC):
                     coords[:, 2:] = (xys[:, 1] * torch.ones(self.dataset.dynamics.N-1, xys.size()[0])).t()
 
                     with torch.no_grad():
-                        model_results = self.model({'coords': self.dataset.dynamics.coord_to_input(coords.cuda())})
+                        model_results = self.model({'coords': self.dataset.dynamics.coord_to_input(coords.cuda(1))})
                         values = self.dataset.dynamics.io_to_value(model_results['model_in'].detach(), model_results['model_out'].squeeze(dim=-1).detach())
                     
                     learned_value = values.detach().cpu().numpy().reshape(x_resolution, y_resolution)
@@ -910,7 +910,7 @@ class Experiment(ABC):
 
             with torch.no_grad():
                 model_results = self.model(
-                    {'coords': self.dataset.dynamics.coord_to_input(coords.cuda())})
+                    {'coords': self.dataset.dynamics.coord_to_input(coords.cuda(1))})
 
                 values = self.dataset.dynamics.io_to_value(model_results['model_in'].detach(
                 ), model_results['model_out'].squeeze(dim=-1).detach())
@@ -928,7 +928,7 @@ class Experiment(ABC):
                 'origin': 'lower',
             }
             ax.imshow(BRT_img, **imshow_kwargs)
-            lx=self.dataset.dynamics.boundary_fn(coords.cuda()[...,1:]).detach().cpu().numpy().reshape(x_resolution, y_resolution).T
+            lx=self.dataset.dynamics.boundary_fn(coords.cuda(1)[...,1:]).detach().cpu().numpy().reshape(x_resolution, y_resolution).T
             zero_contour = ax.contour(X, 
                                 Y, 
                                 BRT_img, 
@@ -977,10 +977,10 @@ class Experiment(ABC):
                 coords[:, 1 + plot_config['y_axis_idx']] = xys[:, 1]
                 coords[:, 1 + plot_config['z_axis_idx']] = zs[j]
 
-                lx=self.dataset.dynamics.boundary_fn(coords.cuda()[...,1:]).detach().cpu().numpy().reshape(x_resolution, y_resolution).T
+                lx=self.dataset.dynamics.boundary_fn(coords.cuda(1)[...,1:]).detach().cpu().numpy().reshape(x_resolution, y_resolution).T
                 with torch.no_grad():
                     model_results = self.model(
-                        {'coords': self.dataset.dynamics.coord_to_input(coords.cuda())})
+                        {'coords': self.dataset.dynamics.coord_to_input(coords.cuda(1))})
                     values = self.dataset.dynamics.io_to_value(model_results['model_in'].detach(
                         ), model_results['model_out'].squeeze(dim=-1).detach())
 
@@ -1257,7 +1257,7 @@ class Experiment(ABC):
                 coords[:, 1 + plot_config['z_axis_idx']] = zs[i]
 
             model_results = model(
-                {'coords': dataset.dynamics.coord_to_input(coords.cuda())})
+                {'coords': dataset.dynamics.coord_to_input(coords.cuda(1))})
             values = dataset.dynamics.io_to_value(model_results['model_in'].detach(
             ), model_results['model_out'].detach().squeeze(dim=-1)).detach().cpu()
             value_grids[i] = values.reshape(len(xs), len(ys))

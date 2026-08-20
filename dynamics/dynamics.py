@@ -191,7 +191,7 @@ class Dynamics(ABC):
     
     def get_val_mean_var(self):
         sobol = SobolEngine(dimension=self.state_range_.shape[0], scramble=True)
-        samples = sobol.draw(1_000_000).to(torch.float64).cuda()  # uniform in [0,1]
+        samples = sobol.draw(1_000_000).to(torch.float64).cuda(1)  # uniform in [0,1]
 
         mins = self.state_range_[:, 0]
         maxs = self.state_range_[:, 1]
@@ -250,10 +250,10 @@ class VertDrone2D(Dynamics):
         self.gravity = 9.8                             # g
         self.input_multiplier = 12.0   # K
         self.input_magnitude_max = 1.0     # u_max
-        self.state_range_ = torch.tensor([[-4, 4],[-0.5, 3.5]]).cuda() # v, z, k
-        self.control_range_ =torch.tensor([[-self.input_magnitude_max, self.input_magnitude_max]]).cuda()
-        self.eps_var=torch.tensor([2]).cuda()
-        self.control_init= torch.ones(1).cuda()*self.gravity/self.input_multiplier
+        self.state_range_ = torch.tensor([[-4, 4],[-0.5, 3.5]]).cuda(1) # v, z, k
+        self.control_range_ =torch.tensor([[-self.input_magnitude_max, self.input_magnitude_max]]).cuda(1)
+        self.eps_var=torch.tensor([2]).cuda(1)
+        self.control_init= torch.ones(1).cuda(1)*self.gravity/self.input_multiplier
 
 
         state_mean_=(self.state_range_[:,0]+self.state_range_[:,1])/2.0
@@ -286,7 +286,7 @@ class VertDrone2D(Dynamics):
         return wrapped_state
 
     def periodic_transform_fn(self, input):
-        return input.cuda()
+        return input.cuda(1)
 
     # ParameterizedVertDrone2D dynamics
     # \dot v = k*u - g
@@ -331,10 +331,10 @@ class VertDroneReachAvoid2D(Dynamics):
         self.gravity = 9.8                             # g
         self.input_multiplier = 12.0   # K
         self.input_magnitude_max = 1.0     # u_max
-        self.state_range_ = torch.tensor([[-4, 4],[-0.5, 3.5]]).cuda() # v, z, k
-        self.control_range_ =torch.tensor([[-self.input_magnitude_max, self.input_magnitude_max]]).cuda()
-        self.eps_var=torch.tensor([2]).cuda()
-        self.control_init= torch.ones(1).cuda()*self.gravity/self.input_multiplier
+        self.state_range_ = torch.tensor([[-4, 4],[-0.5, 3.5]]).cuda(1) # v, z, k
+        self.control_range_ =torch.tensor([[-self.input_magnitude_max, self.input_magnitude_max]]).cuda(1)
+        self.eps_var=torch.tensor([2]).cuda(1)
+        self.control_init= torch.ones(1).cuda(1)*self.gravity/self.input_multiplier
 
 
         state_mean_=(self.state_range_[:,0]+self.state_range_[:,1])/2.0
@@ -369,7 +369,7 @@ class VertDroneReachAvoid2D(Dynamics):
         return wrapped_state
 
     def periodic_transform_fn(self, input):
-        return input.cuda()
+        return input.cuda(1)
 
     # ParameterizedVertDrone2D dynamics
     # \dot v = k*u - g
@@ -455,10 +455,10 @@ class ParameterizedVertDrone2D(Dynamics):
         self.gravity = gravity                             # g
         self.input_multiplier = input_multiplier   # k_max
         self.input_magnitude_max = input_magnitude_max     # u_max
-        self.state_range_ = torch.tensor([[-4, 4],[-0.5, 3.5],[0, self.input_multiplier]]).cuda() # v, z, k
-        self.control_range_ =torch.tensor([[-self.input_magnitude_max, self.input_magnitude_max]]).cuda()
-        self.eps_var=torch.tensor([2]).cuda()
-        self.control_init= torch.ones(1).cuda()*gravity/input_multiplier
+        self.state_range_ = torch.tensor([[-4, 4],[-0.5, 3.5],[0, self.input_multiplier]]).cuda(1) # v, z, k
+        self.control_range_ =torch.tensor([[-self.input_magnitude_max, self.input_magnitude_max]]).cuda(1)
+        self.eps_var=torch.tensor([2]).cuda(1)
+        self.control_init= torch.ones(1).cuda(1)*gravity/input_multiplier
 
 
         state_mean_=(self.state_range_[:,0]+self.state_range_[:,1])/2.0
@@ -490,7 +490,7 @@ class ParameterizedVertDrone2D(Dynamics):
         return wrapped_state
 
     def periodic_transform_fn(self, input):
-        return input.cuda()
+        return input.cuda(1)
 
     # ParameterizedVertDrone2D dynamics
     # \dot v = k*u - g
@@ -531,16 +531,177 @@ class ParameterizedVertDrone2D(Dynamics):
             'y_axis_idx': 1,
             'z_axis_idx': 2,
         }
+        
+class BicopterBox(Dynamics):
+    def __init__(self, gravity: float, input_magnitude_max: float):
+        self.gravity = gravity                             # g
+        self.input_magnitude_max = input_magnitude_max     # u_max
+        self.state_range_ = torch.tensor([[-4.1, 4.1],[-4.1, 4.1],[-np.pi, np.pi], [0.15,4],[0.15,4], [0.15,4],[0.15,4],[-3,3],[-3,3],[-20,20]]).cuda(1) # y,z,theta, y_dot,z_dot,theta_dot, 
+        self.control_range_ =torch.tensor([[-self.input_magnitude_max, self.input_magnitude_max],[-self.input_magnitude_max, self.input_magnitude_max]]).cuda(1)
+        self.eps_var=torch.tensor([2]).cuda(1)
+        
+        self.control_init= torch.tensor([ self.gravity/2 ,self.gravity/2 ]).cuda(1)
+        
+
+        state_mean_=(self.state_range_[:,0]+self.state_range_[:,1])/2.0
+        state_var_=(self.state_range_[:,1]-self.state_range_[:,0])/2.0
+        
+        self.mass = 0.75
+        self.arm_length = 0.1
+        self.J_inertia = 0.00735
+        
+        self.diag_y = 0.15
+        self.diag_z = 0.05
+        
+        
+        # Create the axes matrix for the ellipsoid
+        self.axes_matrix = torch.tensor([[self.diag_y**2, 0],
+                                        [0, self.diag_z**2]], device=self.state_range_.device)
+        # self.axes_matrix = self.axes_matrix.to(device)
+        
+        self.y_direction = torch.tensor([1.0, 0.0], device=self.state_range_.device)
+        self.z_direction = torch.tensor([0.0, 1.0], device=self.state_range_.device)
+
+        super().__init__(
+            name='BicopterBox', loss_type='brt_hjivi', set_mode='avoid',
+            state_dim=self.state_range_.shape[0], input_dim=self.state_range_.shape[0] + 1, control_dim=2, disturbance_dim=0,
+            state_mean=state_mean_.cpu().tolist(),
+            state_var=state_var_.cpu().tolist(),
+            value_mean=0.5,
+            value_var=1,
+            value_normto=0.02,
+            deepReach_model='exact',  # chioce ['vanilla', 'exact'],
+        )
+
+    def state_test_range(self):
+        return self.state_range_.cpu().tolist()
+    
+    def state_verification_range(self):
+        return self.state_range_.cpu().tolist()
+
+    def equivalent_wrapped_state(self, state):
+        # wrapped_state = torch.clone(state)
+        # wrapped_state[..., 2] = (
+        #     (wrapped_state[..., 2] + np.pi) % (2 * np.pi) - np.pi
+        # )
+        return state
+
+    def periodic_transform_fn(self, input):
+        return input
+
+    # ParameterizedVertDrone2D dynamics
+    # \dot v = k*u - g
+    # \dot z = v
+    # \dot k = 0
+    def dsdt(self, state, control, disturbance):
+        dsdt = torch.zeros_like(state)
+        dsdt[..., 0] = state[..., 7] 
+        dsdt[..., 1] = state[..., 8]
+        dsdt[..., 2] = state[..., 9]
+        dsdt[..., 3] = 0*state[..., 3] 
+        dsdt[..., 4] = 0*state[..., 4]
+        dsdt[..., 5] = 0*state[..., 5]
+        dsdt[..., 6] = 0*state[..., 6]
+        dsdt[..., 7] = (control[..., 0] + control[..., 1]) * (-torch.sin(state[..., 2]) / self.mass)
+        dsdt[..., 8] = (control[..., 0] + control[..., 1]) * torch.cos(state[..., 2]) / self.mass - self.gravity
+        dsdt[..., 9] = (control[..., 1] - control[..., 0]) * self.arm_length / self.J_inertia
+        return dsdt
+
+    def boundary_fn(self, state):
+        device = state.device
+        
+        self.axes_matrix = self.axes_matrix.to(device)
+        self.y_direction = self.y_direction.to(device)
+        self.z_direction = self.z_direction.to(device)
+        py = state[..., 0]
+        pz = state[..., 1]
+        p_theta = state[..., 2]
+        y_min = -state[..., 3]
+        y_max = state[..., 4]
+        z_min = -state[..., 5]
+        z_max = state[..., 6]
+
+        cos_t = torch.cos(p_theta)
+        sin_t = torch.sin(p_theta)
+        # R shape: (..., 2, 2)
+        R = torch.stack([
+            torch.stack([cos_t, -sin_t], dim=-1),
+            torch.stack([sin_t,  cos_t], dim=-1),
+        ], dim=-2)
+
+        Q_ellips_mat = R @ self.axes_matrix @ R.transpose(-1, -2)    
+        # # Q shape: (..., 2, 2)
+        # Q_ellips_mat = R @ self.axes_matrix @ R.transpose(-1, -2)
+
+        # w_y, w_z shape: (...,)  — quadratic form n^T Q n per batch element
+        w_y = torch.sqrt(torch.einsum('i,...ij,j->...', self.y_direction, Q_ellips_mat, self.y_direction))
+        w_z = torch.sqrt(torch.einsum('i,...ij,j->...', self.z_direction, Q_ellips_mat, self.z_direction))
+
+        c_y_0 = py - w_y - y_min
+        c_y_1 = y_max - (py + w_y)
+        c_z_0 = pz - w_z - z_min
+        c_z_1 = z_max - (pz + w_z)
+
+        theta_min = p_theta - self.state_range_.to(device)[2, 0]
+        theta_max = self.state_range_.to(device)[2, 1] - p_theta
+
+        return torch.min(torch.stack([c_y_0, c_y_1, c_z_0, c_z_1, theta_min, theta_max], dim=-1), dim=-1).values
+        
+    def sample_target_state(self, num_samples):
+        raise NotImplementedError
+
+    def cost_fn(self, state_traj):
+        return torch.min(self.boundary_fn(state_traj), dim=-1).values
+    
+    def hamiltonian(self, state, dvds):
+        theta = state[..., 2]
+        sin_t = torch.sin(theta)
+        cos_t = torch.cos(theta)
+
+        c1 = -dvds[..., 7] * sin_t / self.mass + dvds[..., 8] * cos_t / self.mass - dvds[..., 9] * self.arm_length / self.J_inertia
+        c2 = -dvds[..., 7] * sin_t / self.mass + dvds[..., 8] * cos_t / self.mass + dvds[..., 9] * self.arm_length / self.J_inertia
+
+        return dvds[..., 0] * state[..., 7] \
+            + dvds[..., 1] * state[..., 8] \
+            + dvds[..., 2] * state[..., 9] \
+            + self.input_magnitude_max * torch.clamp(c1, min=0) \
+            + self.input_magnitude_max * torch.clamp(c2, min=0) \
+            - dvds[..., 8] * self.gravity
+
+    def optimal_control(self, state, dvds):
+        theta = state[..., 2]
+        sin_t = torch.sin(theta)
+        cos_t = torch.cos(theta)
+
+        c1 = -dvds[..., 7] * sin_t / self.mass + dvds[..., 8] * cos_t / self.mass - dvds[..., 9] * self.arm_length / self.J_inertia
+        c2 = -dvds[..., 7] * sin_t / self.mass + dvds[..., 8] * cos_t / self.mass + dvds[..., 9] * self.arm_length / self.J_inertia
+
+        u1 = self.input_magnitude_max * torch.clamp(torch.sign(c1), min=0)
+        u2 = self.input_magnitude_max * torch.clamp(torch.sign(c2), min=0)
+
+        return torch.stack([u1, u2], dim=-1)
+    
+    def optimal_disturbance(self, state, dvds):
+        return torch.tensor([0])
+
+    def plot_config(self):
+        return {
+            'state_slices': [0, 0, 0 ,2.5,2.5,2.5,2.5, 0, 0, 0],
+            'state_labels': ['y', 'z', 'theta', 'y_min', 'y_max', 'z_min', 'z_max', 'y_dot', 'z_dot', 'theta_dot'],
+            'x_axis_idx': 0,
+            'y_axis_idx': 1,
+            'z_axis_idx': 7,
+        }
 
 class Dubins3D(Dynamics):
     def __init__(self, set_mode: str):
         self.goalR = 0.5
         self.velocity = 1.
         self.omega_max = 1.2
-        self.state_range_ = torch.tensor([[-1, 1],[-1, 1],[-math.pi, math.pi]]).cuda()
-        self.control_range_ =torch.tensor([[-self.omega_max, self.omega_max]]).cuda()
-        self.eps_var=torch.tensor([1]).cuda()
-        self.control_init= torch.zeros(1).cuda()
+        self.state_range_ = torch.tensor([[-1, 1],[-1, 1],[-math.pi, math.pi]]).cuda(1)
+        self.control_range_ =torch.tensor([[-self.omega_max, self.omega_max]]).cuda(1)
+        self.eps_var=torch.tensor([1]).cuda(1)
+        self.control_init= torch.zeros(1).cuda(1)
         self.set_mode=set_mode
 
         state_mean_=(self.state_range_[:,0]+self.state_range_[:,1])/2.0
@@ -578,7 +739,7 @@ class Dubins3D(Dynamics):
         transformed_input[..., :3] = input[..., :3]
         transformed_input[..., 3] = torch.sin(input[..., 3]*self.state_var[-1])
         transformed_input[..., 4] = torch.cos(input[..., 3]*self.state_var[-1])
-        return transformed_input.cuda()
+        return transformed_input.cuda(1)
 
     # Dubins3D dynamics
     # \dot x    = v \cos \theta
@@ -664,13 +825,13 @@ class Quadrotor(Dynamics):
             [-5.0, 5.0],
             [-5.0, 5.0],
             [-5.0, 5.0],
-            ]).cuda()
+            ]).cuda(1)
         self.control_range_ =torch.tensor([[-self.collective_thrust_max, self.collective_thrust_max],
                 [-self.dwx_max, self.dwx_max],
                 [-self.dwy_max, self.dwy_max],
-                [-self.dwz_max, self.dwz_max]]).cuda()
-        self.eps_var=torch.tensor([20,8,8,4]).cuda()
-        self.control_init= torch.tensor([-self.Gz*0.0,0,0,0]).cuda()
+                [-self.dwz_max, self.dwz_max]]).cuda(1)
+        self.eps_var=torch.tensor([20,8,8,4]).cuda(1)
+        self.control_init= torch.tensor([-self.Gz*0.0,0,0,0]).cuda(1)
 
         state_mean_=(self.state_range_[:,0]+self.state_range_[:,1])/2.0
         state_var_=(self.state_range_[:,1]-self.state_range_[:,0])/2.0
@@ -714,7 +875,7 @@ class Quadrotor(Dynamics):
         return self.state_range_.cpu().tolist()
 
     def periodic_transform_fn(self, input):
-        return input.cuda()
+        return input.cuda(1)
 
     def equivalent_wrapped_state(self, state):
         wrapped_state = torch.clone(state)
@@ -1061,10 +1222,10 @@ class F1tenth(Dynamics):
         self.y_min=self.ymean-self.yvar
         self.y_max=self.ymean+self.yvar
 
-        self.state_range_ = torch.tensor([[self.x_min, self.x_max], [self.y_min, self.y_max], [-0.4189, 0.4189], [self.v_min, self.v_max], [-math.pi, math.pi], [-self.omega_max, self.omega_max], [-1, 1]]).cuda()
-        self.control_range_ = torch.tensor([[self.sv_min, self.sv_max], [-self.a_max, self.a_max]]).cuda()
-        self.eps_var = torch.tensor([self.sv_max**2, self.a_max**2]).cuda()
-        self.control_init = torch.tensor([0.0, 0.0]).cuda()
+        self.state_range_ = torch.tensor([[self.x_min, self.x_max], [self.y_min, self.y_max], [-0.4189, 0.4189], [self.v_min, self.v_max], [-math.pi, math.pi], [-self.omega_max, self.omega_max], [-1, 1]]).cuda(1)
+        self.control_range_ = torch.tensor([[self.sv_min, self.sv_max], [-self.a_max, self.a_max]]).cuda(1)
+        self.eps_var = torch.tensor([self.sv_max**2, self.a_max**2]).cuda(1)
+        self.control_init = torch.tensor([0.0, 0.0]).cuda(1)
 
         # for the track
         self.obstaclemap_file = 'dynamics/F1_map_obstaclemap.mat'
@@ -1119,7 +1280,7 @@ class F1tenth(Dynamics):
         transformed_input[..., 5] = torch.sin(input[..., 5]*self.state_var[4])
         transformed_input[..., 6] = torch.cos(input[..., 5]*self.state_var[4])
         transformed_input[..., 7:] = input[..., 6:]
-        return transformed_input.cuda()
+        return transformed_input.cuda(1)
 
     def dsdt(self, state, control, disturbance):
         # here the control is steering angle v and acceleration
@@ -1384,9 +1545,9 @@ class LessLinearND(Dynamics):
         self.input_shape = "box"
         self.game = set_mode
 
-        self.A = (-0.5 * torch.eye(N) - torch.cat((torch.cat((torch.zeros(1,1),torch.ones(N-1,1)),0),torch.zeros(N,N-1)),1)).cuda()
-        self.B = torch.cat((torch.zeros(1,N-1), 0.4*torch.eye(N-1)), 0).cuda()
-        self.Bumax = u_max * torch.matmul(self.B, torch.ones(self.N-1).cuda()).unsqueeze(0).unsqueeze(0).cuda()
+        self.A = (-0.5 * torch.eye(N) - torch.cat((torch.cat((torch.zeros(1,1),torch.ones(N-1,1)),0),torch.zeros(N,N-1)),1)).cuda(1)
+        self.B = torch.cat((torch.zeros(1,N-1), 0.4*torch.eye(N-1)), 0).cuda(1)
+        self.Bumax = u_max * torch.matmul(self.B, torch.ones(self.N-1).cuda(1)).unsqueeze(0).unsqueeze(0).cuda(1)
         self.C = torch.cat((torch.zeros(1,N-1), 0.1*torch.eye(N-1)), 0)
         self.gamma, self.mu, self.alpha = gamma, mu, alpha
         self.gamma_orig, self.mu_orig, self.alpha_orig = gamma, mu, alpha
@@ -1395,10 +1556,10 @@ class LessLinearND(Dynamics):
         self.goalR = ((N-1) ** 0.5) * self.goalR_2d # accounts for N-dimensional combination
         self.ellipse_params = torch.cat((((N-1) ** 0.5) * torch.ones(1), torch.ones(N-1) / 1.), 0) # accounts for N-dimensional combination
 
-        self.state_range_ = torch.tensor([[-1, 1] for _ in range(self.N)]).cuda()
-        self.control_range_ =torch.tensor([[-u_max, u_max] for _ in range(self.N-1)]).cuda()
-        self.eps_var=torch.tensor([u_max for _ in range(self.N-1)]).cuda()
-        self.control_init= torch.tensor([0.0 for _ in range(self.N-1)]).cuda()
+        self.state_range_ = torch.tensor([[-1, 1] for _ in range(self.N)]).cuda(1)
+        self.control_range_ =torch.tensor([[-u_max, u_max] for _ in range(self.N-1)]).cuda(1)
+        self.eps_var=torch.tensor([u_max for _ in range(self.N-1)]).cuda(1)
+        self.control_init= torch.tensor([0.0 for _ in range(self.N-1)]).cuda(1)
 
         super().__init__(
             name='50D system', loss_type='brt_hjivi', set_mode=set_mode,
@@ -1460,12 +1621,12 @@ class LessLinearND(Dynamics):
 
 
     def periodic_transform_fn(self, input):
-        return input.cuda()
+        return input.cuda(1)
 
     def boundary_fn(self, state):
         if self.ellipse_params.device != state.device: # FIXME: Patch to cover de/attached state bug
-            if state.device.type == 'cuda':
-                self.ellipse_params = self.ellipse_params.cuda()
+            if state.device.type == 'cuda:1':
+                self.ellipse_params = self.ellipse_params.cuda(1)
             else:
                 self.ellipse_params = self.ellipse_params.cpu()
         return 0.5 * (torch.square(torch.norm(self.ellipse_params * state[..., :], dim=-1)) - (self.goalR ** 2))
@@ -1541,13 +1702,13 @@ class QuadrotorReachAvoid(Dynamics):
             [-10, 10],
             [-10, 10],
             [-10, 10],
-            ], dtype=torch.float64).cuda()
+            ], dtype=torch.float64).cuda(1)
         self.control_range_ =torch.tensor([[-self.collective_thrust_max, self.collective_thrust_max],
                 [-self.dwx_max, self.dwx_max],
                 [-self.dwy_max, self.dwy_max],
-                [-self.dwz_max, self.dwz_max]]).cuda()
-        self.eps_var=torch.tensor([self.collective_thrust_max ,8,8,4]).cuda()
-        self.control_init= torch.tensor([-self.Gz*0.0,0,0,0]).cuda()
+                [-self.dwz_max, self.dwz_max]]).cuda(1)
+        self.eps_var=torch.tensor([self.collective_thrust_max ,8,8,4]).cuda(1)
+        self.control_init= torch.tensor([-self.Gz*0.0,0,0,0]).cuda(1)
 
         state_mean_=(self.state_range_[:,0]+self.state_range_[:,1])/2.0
         state_var_=(self.state_range_[:,1]-self.state_range_[:,0])/2.0
@@ -1673,7 +1834,7 @@ class QuadrotorReachAvoid(Dynamics):
         return self.state_range_.cpu().tolist()
 
     def periodic_transform_fn(self, input):
-        return input.cuda()
+        return input.cuda(1)
 
     def equivalent_wrapped_state(self, state):
         wrapped_state = torch.clone(state)
@@ -2058,13 +2219,13 @@ class QuadrotorReachAvoidTunnel(Dynamics):
             [-10, 10],
             [-10, 10],
             [-10, 10],
-            ], dtype=torch.float64).cuda()
+            ], dtype=torch.float64).cuda(1)
         self.control_range_ =torch.tensor([[-self.collective_thrust_max, self.collective_thrust_max],
                 [-self.dwx_max, self.dwx_max],
                 [-self.dwy_max, self.dwy_max],
-                [-self.dwz_max, self.dwz_max]]).cuda()
-        self.eps_var=torch.tensor([20,8,8,4]).cuda()
-        self.control_init= torch.tensor([-self.Gz*0.0,0,0,0]).cuda()
+                [-self.dwz_max, self.dwz_max]]).cuda(1)
+        self.eps_var=torch.tensor([20,8,8,4]).cuda(1)
+        self.control_init= torch.tensor([-self.Gz*0.0,0,0,0]).cuda(1)
 
         state_mean_=(self.state_range_[:,0]+self.state_range_[:,1])/2.0
         state_var_=(self.state_range_[:,1]-self.state_range_[:,0])/2.0
@@ -2201,7 +2362,7 @@ class QuadrotorReachAvoidTunnel(Dynamics):
         return self.state_range_.cpu().tolist()
 
     def periodic_transform_fn(self, input):
-        return input.cuda()
+        return input.cuda(1)
 
     def equivalent_wrapped_state(self, state):
         wrapped_state = torch.clone(state)
@@ -2586,11 +2747,11 @@ class PlanarQuadrotorEqBRAT(Dynamics):
             [-5.0, 5.0],
             [-5.0, 5.0],
             [-20.0, 20.0]
-            ]).cuda()
+            ]).cuda(1)
         self.control_range_ =torch.tensor([[-self.thrust_max, self.thrust_max],
-                                           [-self.thrust_max, self.thrust_max]]).cuda()
-        self.eps_var=torch.tensor([self.thrust_max,self.thrust_max]).cuda()
-        self.control_init= torch.tensor([0.0,0]).cuda()
+                                           [-self.thrust_max, self.thrust_max]]).cuda(1)
+        self.eps_var=torch.tensor([self.thrust_max,self.thrust_max]).cuda(1)
+        self.control_init= torch.tensor([0.0,0]).cuda(1)
 
         state_mean_=(self.state_range_[:,0]+self.state_range_[:,1])/2.0
         state_var_=(self.state_range_[:,1]-self.state_range_[:,0])/2.0
@@ -2616,7 +2777,7 @@ class PlanarQuadrotorEqBRAT(Dynamics):
         return self.state_range_.cpu().tolist()
 
     def periodic_transform_fn(self, input):
-        return input.cuda()
+        return input.cuda(1)
 
     def equivalent_wrapped_state(self, state):
         wrapped_state = torch.clone(state)
@@ -2675,7 +2836,7 @@ class PlanarQuadrotorEqBRAT(Dynamics):
 
     def avoid_fn(self, state):
         device = state.device.type
-        if 'cuda' in device:
+        if 'cuda:1' in device:
             g_l = self.state_range_[0:2, 0] - state[...,0:2]
             g_u = state[...,0:2] -  self.state_range_[0:2, 1]
         else:

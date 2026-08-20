@@ -28,9 +28,9 @@ class MLPValidator(Validator):
 
     def validate(self, coords, values):
         model_results = self.model(
-            {'coords': self.dynamics.coord_to_input(coords.cuda())})
+            {'coords': self.dynamics.coord_to_input(coords.cuda(1))})
         inputs = torch.cat(
-            (coords[..., 1:].cuda(), values[:, None].cuda()), dim=-1)
+            (coords[..., 1:].cuda(1), values[:, None].cuda(1)), dim=-1)
         outputs = torch.sigmoid(self.mlp(inputs).squeeze())
         return ((outputs >= self.o_min)*(outputs <= self.o_max)).to(device=values.device)
 
@@ -46,9 +46,9 @@ class MLPConditionedValidator(Validator):
 
     def validate(self, coords, values):
         model_results = self.model(
-            {'coords': self.dynamics.coord_to_input(coords.cuda())})
+            {'coords': self.dynamics.coord_to_input(coords.cuda(1))})
         inputs = torch.cat(
-            (coords[..., 1:].cuda(), values[:, None].cuda()), dim=-1)
+            (coords[..., 1:].cuda(1), values[:, None].cuda(1)), dim=-1)
         outputs = torch.sigmoid(self.mlp(inputs).squeeze(
             dim=-1)).to(device=values.device)
         valids = torch.zeros_like(outputs)
@@ -186,7 +186,7 @@ def scenario_optimization(model,  dynamics, tMin, tMax, dt, set_type, control_ty
             # validate batch
             with torch.no_grad():
                 batch_sample_model_results = model(
-                    {'coords': dynamics.coord_to_input(batch_sample_coords.cuda())})
+                    {'coords': dynamics.coord_to_input(batch_sample_coords.cuda(1))})
                 batch_sample_values = dynamics.io_to_value(batch_sample_model_results['model_in'].detach(
                 ), batch_sample_model_results['model_out'].squeeze(dim=-1).detach())
             batch_valid_sample_idxs = torch.where(sample_validator.validate(
@@ -229,29 +229,29 @@ def scenario_optimization(model,  dynamics, tMin, tMax, dt, set_type, control_ty
             traj_coords = torch.cat(
                 (traj_times.unsqueeze(-1), perceived_state), dim=-1)
             traj_policy_results = policy(
-                {'coords': dynamics.coord_to_input(traj_coords.cuda())})
+                {'coords': dynamics.coord_to_input(traj_coords.cuda(1))})
             traj_dvs = dynamics.io_to_dv(
                 traj_policy_results['model_in'], traj_policy_results['model_out'].squeeze(dim=-1)).detach()
 
             # TODO: I do not think there is actually any reason to store these trajs? Could save space by removing these.
             ctrl_trajs[:, k] = dynamics.optimal_control(
-                traj_coords[:, 1:].cuda(), traj_dvs[..., 1:].cuda())
+                traj_coords[:, 1:].cuda(1), traj_dvs[..., 1:].cuda(1))
             dstb_trajs[:, k] = dynamics.optimal_disturbance(
-                traj_coords[:, 1:].cuda(), traj_dvs[..., 1:].cuda())
+                traj_coords[:, 1:].cuda(1), traj_dvs[..., 1:].cuda(1))
             # ham_trajs[:, k] = dynamics.hamiltonian(
-            #     traj_coords[:, 1:].cuda(), traj_dvs[..., 1:].cuda()) # No need to compute this
+            #     traj_coords[:, 1:].cuda(1), traj_dvs[..., 1:].cuda(1)) # No need to compute this
  
             if tStart_generator is not None:  # freeze states whose start time has not been reached yet
                 is_frozen = batch_scenario_times < traj_times
                 is_unfrozen = torch.logical_not(is_frozen)
                 state_trajs[is_frozen, k+1] = state_trajs[is_frozen, k]
-                # state_trajs[is_unfrozen, k+1] = dynamics.equivalent_wrapped_state(state_trajs[is_unfrozen, k].cuda() + dt*dynamics.dsdt(
-                #     state_trajs[is_unfrozen, k].cuda(), ctrl_trajs[is_unfrozen, k].cuda(), dstb_trajs[is_unfrozen, k].cuda(), torch.ones((scenario_batch_size, 1)).cuda())).cpu()
-                state_trajs[is_unfrozen, k+1] = dynamics.equivalent_wrapped_state(state_trajs[is_unfrozen, k].cuda() + dt*dynamics.dsdt(
-                    state_trajs[is_unfrozen, k].cuda(), ctrl_trajs[is_unfrozen, k].cuda(), dstb_trajs[is_unfrozen, k].cuda()).cuda()).cpu()
+                # state_trajs[is_unfrozen, k+1] = dynamics.equivalent_wrapped_state(state_trajs[is_unfrozen, k].cuda(1) + dt*dynamics.dsdt(
+                #     state_trajs[is_unfrozen, k].cuda(1), ctrl_trajs[is_unfrozen, k].cuda(1), dstb_trajs[is_unfrozen, k].cuda(1), torch.ones((scenario_batch_size, 1)).cuda(1))).cpu()
+                state_trajs[is_unfrozen, k+1] = dynamics.equivalent_wrapped_state(state_trajs[is_unfrozen, k].cuda(1) + dt*dynamics.dsdt(
+                    state_trajs[is_unfrozen, k].cuda(1), ctrl_trajs[is_unfrozen, k].cuda(1), dstb_trajs[is_unfrozen, k].cuda(1)).cuda(1)).cpu()
             else:
                 next_state_ = dynamics.equivalent_wrapped_state(state_trajs[:, k].cuda(
-                ) + dt*dynamics.dsdt(state_trajs[:, k].cuda(), ctrl_trajs[:, k].cuda(), dstb_trajs[:, k].cuda()))
+                ) + dt*dynamics.dsdt(state_trajs[:, k].cuda(1), ctrl_trajs[:, k].cuda(1), dstb_trajs[:, k].cuda(1)))
                 state_trajs[:, k+1] = next_state_
        
 
@@ -259,14 +259,14 @@ def scenario_optimization(model,  dynamics, tMin, tMax, dt, set_type, control_ty
         # compute batch_scenario_costs
         # TODO: need to handle the case of using tStart_generator when extending a trajectory by a frozen initial state will inadvertently affect cost computation (the min lx cost formulation is unaffected, but other cost formulations might care)
         if set_type == 'BRT':
-            batch_scenario_costs = dynamics.cost_fn(state_trajs.cuda())
+            batch_scenario_costs = dynamics.cost_fn(state_trajs.cuda(1))
         elif set_type == 'BRS':
             if control_type == 'init_ttr':  # is this correct for init_ttr?
                 batch_scenario_costs = dynamics.boundary_fn(
-                    state_trajs.cuda())[:, (init_traj_times - tMin) / dt]
+                    state_trajs.cuda(1))[:, (init_traj_times - tMin) / dt]
             elif control_type == 'value':
                 batch_scenario_costs = dynamics.boundary_fn(
-                    state_trajs.cuda())[:, -1]
+                    state_trajs.cuda(1))[:, -1]
             else:
                 raise NotImplementedError  # what is the correct thing to do for ttr?
 
@@ -370,7 +370,7 @@ def target_fraction(model, dynamics, t, sample_validator, target_validator, num_
 
             # validate batch
             batch_model_results = model(
-                {'coords': dynamics.coord_to_input(batch_coords.cuda())})
+                {'coords': dynamics.coord_to_input(batch_coords.cuda(1))})
             batch_values = dynamics.io_to_value(
                 batch_model_results['model_in'], batch_model_results['model_out'].squeeze(dim=-1)).detach()
             batch_valids = sample_validator.validate(
@@ -385,7 +385,7 @@ def target_fraction(model, dynamics, t, sample_validator, target_validator, num_
         states = states[:num_samples]
         values = values[:num_samples]
         coords = torch.cat((torch.full((num_samples, 1), t), states), dim=-1)
-        valids = target_validator.validate(coords.cuda(), values.cuda())
+        valids = target_validator.validate(coords.cuda(1), values.cuda(1))
     return torch.sum(valids) / num_samples
 
 

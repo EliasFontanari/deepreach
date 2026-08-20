@@ -304,7 +304,7 @@ if mode=='test':
 model = modules.SingleBVPNet(in_features=dynamics.input_dim, out_features=1, type=orig_opt.model, mode=orig_opt.model_mode,
                              final_layer_factor=1., hidden_features=orig_opt.num_nl, num_hidden_layers=orig_opt.num_hl, 
                              periodic_transform_fn=dynamics.periodic_transform_fn)
-model.cuda()
+model.cuda(1)
 policy=None
 if orig_opt.pretrained_model != "none":
     model.load_state_dict(torch.load(

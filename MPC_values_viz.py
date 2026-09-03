@@ -56,12 +56,12 @@ def ensure_folder(path):
 
 if __name__ == "__main__":
     if torch.cuda.is_available():
-        device = torch.device('cuda:1')
+        device = torch.device('cuda:0')
     else:
         device = torch.device('cpu')
 
-    dynamics_ = dynamics.ParameterizedVertDrone2D(9.8, 12.0, 1.0)
-    T = 1.2
+    dynamics_ = dynamics.QuadcopterBox(9.81,17.496/10, device=device)
+    T = 1.
     x_res = 100
     y_res = 100
     plot_config = dynamics_.plot_config()

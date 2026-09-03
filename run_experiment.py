@@ -200,6 +200,8 @@ if (mode == 'all') or (mode == 'train'):
     # Typically min with target works better than min with zero
     
 
+    p.add_argument('--device', type=str, default='cuda:0', help='Device to run on, e.g. cuda:0, cuda:1, cpu')
+
     # load dynamics_class choices dynamically from dynamics module
     dynamics_classes_dict = {name: clss for name, clss in inspect.getmembers(
         dynamics, inspect.isclass) if clss.__bases__[0] == dynamics.Dynamics}
@@ -211,6 +213,8 @@ if (mode == 'all') or (mode == 'train'):
     dynamics_params = {name: param for name, param in inspect.signature(
         dynamics_class).parameters.items() if name != 'self'}
     for param in dynamics_params.keys():
+        if param == 'device':
+            continue
         if dynamics_params[param].annotation is bool:
             p.add_argument(
                 '--' + param, type=dynamics_params[param].annotation, default=False, help='special dynamics_class argument')
@@ -304,7 +308,7 @@ if mode=='test':
 model = modules.SingleBVPNet(in_features=dynamics.input_dim, out_features=1, type=orig_opt.model, mode=orig_opt.model_mode,
                              final_layer_factor=1., hidden_features=orig_opt.num_nl, num_hidden_layers=orig_opt.num_hl, 
                              periodic_transform_fn=dynamics.periodic_transform_fn)
-model.cuda(1)
+model.to(orig_opt.device)
 policy=None
 if orig_opt.pretrained_model != "none":
     model.load_state_dict(torch.load(

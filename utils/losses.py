@@ -9,7 +9,7 @@ def init_brt_hjivi_loss(dynamics, minWith, dirichlet_loss_divisor, MPC_loss_type
                         use_MPC_terminal_loss=False):
         # Curriculum training loss
         if dynamics.deepReach_model == 'exact':
-            dirichlet_loss = torch.Tensor([0]).cuda(1)
+            dirichlet_loss = torch.Tensor([0]).to(value.device)
         else:
             dirichlet = value[dirichlet_mask] - boundary_value[dirichlet_mask]
             dirichlet_loss=torch.abs(dirichlet).sum() / dirichlet_loss_divisor
@@ -45,7 +45,7 @@ def init_brt_hjivi_loss(dynamics, minWith, dirichlet_loss_divisor, MPC_loss_type
         
 
         if torch.all(dirichlet_mask): # pretraining loss
-            diff_constraint_hom = torch.Tensor([0]).cuda(1)
+            diff_constraint_hom = torch.Tensor([0]).to(value.device)
             if use_MPC:
                 dirichlet_loss += mpc_loss*0.3
             elif dynamics.deepReach_model == 'exact':
@@ -75,7 +75,7 @@ def init_brat_hjivi_loss(dynamics, minWith, dirichlet_loss_divisor, MPC_loss_typ
                         use_MPC_terminal_loss=False):
         # Curriculum training loss
         if dynamics.deepReach_model == 'exact':
-            dirichlet_loss = torch.Tensor([0]).cuda(1)
+            dirichlet_loss = torch.Tensor([0]).to(value.device)
         else:
             dirichlet = value[dirichlet_mask] - boundary_value[dirichlet_mask]
             dirichlet_loss=torch.abs(dirichlet).sum() / dirichlet_loss_divisor
@@ -101,7 +101,7 @@ def init_brat_hjivi_loss(dynamics, minWith, dirichlet_loss_divisor, MPC_loss_typ
 
 
         if torch.all(dirichlet_mask): # pretraining loss
-            diff_constraint_hom = torch.Tensor([0]).cuda(1)
+            diff_constraint_hom = torch.Tensor([0]).to(value.device)
             if use_MPC:
                 dirichlet_loss += mpc_loss*0.3
             elif dynamics.deepReach_model == 'exact':

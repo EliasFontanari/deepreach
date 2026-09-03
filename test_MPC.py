@@ -200,6 +200,8 @@ if (mode == 'all') or (mode == 'train'):
     # Typically min with target works better than min with zero
 
 
+    p.add_argument('--device', type=str, default='cuda:0', help='Device to run on, e.g. cuda:0, cuda:1, cpu')
+
     # load dynamics_class choices dynamically from dynamics module
     dynamics_classes_dict = {name: clss for name, clss in inspect.getmembers(
         dynamics, inspect.isclass) if clss.__bases__[0] == dynamics.Dynamics}
@@ -211,6 +213,8 @@ if (mode == 'all') or (mode == 'train'):
     dynamics_params = {name: param for name, param in inspect.signature(
         dynamics_class).parameters.items() if name != 'self'}
     for param in dynamics_params.keys():
+        if param == 'device':
+            continue
         if dynamics_params[param].annotation is bool:
             p.add_argument(
                 '--' + param, type=dynamics_params[param].annotation, default=False, help='special dynamics_class argument')
@@ -270,7 +274,7 @@ dataset = dataio.ReachabilityDataset(
     time_till_refinement=opt.time_till_refinement,num_MPC_batches=opt.num_MPC_batches,
     aug_with_MPC_data= opt.aug_with_MPC_data, policy=None, refine_dataset=(not opt.not_refine_dataset))
 # mpc_module = MPC.MPC(horizon=None, receding_horizon=opt.MPC_receding_horizon, dT=opt.MPC_dt, num_samples=opt.num_MPC_perturbation_samples,
-#                            dynamics_=opt.dynamics, device='cuda:1', mode=opt.MPC_mode,
+#                            dynamics_=opt.dynamics, device='cuda:0', mode=opt.MPC_mode,
 #                            sample_mode=opt.MPC_sample_mode, lambda_=opt.MPC_lambda_, style=opt.MPC_style, num_iterative_refinement=opt.num_iterative_refinement)
 
 print(f'MPC TEST')

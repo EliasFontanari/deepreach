@@ -1603,6 +1603,432 @@ class QuadcopterBox(Dynamics):
             "z_axis_idx": 6,
         }
  
+class QuadcopterBox2(Dynamics):
+    """
+    Plus-configuration quadcopter (Euler angles) that must stay inside a cube whose
+    half-width is the last state component.
+
+    Identical to QuadcopterBox -- same dynamics, same state and control ranges, same box
+    margins, same roll/pitch margins -- except for yaw:
+
+      * psi is wrapped into [-pi, pi] in equivalent_wrapped_state, and
+      * psi has no margin in boundary_fn.
+
+    In QuadcopterBox psi is integrated unwrapped and carries a +-pi margin, so a rollout
+    that completes a yaw revolution reads psi > pi and is scored as a failure, even
+    though a full turn in yaw is physically nothing and leaves the box constraint
+    untouched. This class removes that artefact and nothing else.
+
+    Roll/pitch keep the +-pi range, so the 1/cos(theta) singularity of the Euler-angle
+    kinematics at |theta| = pi/2 is inside the state range. A rollout crossing it blows
+    roll and yaw up together (they share the singular factor), and the roll margin is
+    what registers that as unsafe -- so the roll/pitch margins are load bearing and must
+    not be removed while this range is in use.
+
+    State: x, y, z, phi, theta, psi, x_dot, y_dot, z_dot, w_x, w_y, w_z, box
+    """
+
+    def __init__(self, gravity: float, input_magnitude_max: float, device: str = 'cuda:0'):
+        self.gravity = gravity  # g
+        self.input_magnitude_max = input_magnitude_max  # u_max
+
+        self.mass = 1.5
+        self.arm_length = 0.1
+        self.J_xx = 0.0155
+        self.J_yy = 0.0147
+        self.J_zz = 0.0251
+
+        # ellipsoidal footprint semi-axes (body frame)
+        self.diag_x = 0.15
+        self.diag_y = 0.15
+        self.diag_z = 0.05
+        self.cf = 0.0015
+        self.ct = 0.0000459
+
+        self.box_min = 0.15
+        self.box_max = 4.0
+
+        self.state_range_ = torch.tensor(
+            [
+                [-4.1, 4.1],
+                [-4.1, 4.1],
+                [-4.1, 4.1],
+                [-np.pi, np.pi],
+                [-np.pi, np.pi],
+                [-np.pi, np.pi],
+                [-2, 2],
+                [-2, 2],
+                [-2, 2],
+                [-15, 15],
+                [-15, 15],
+                [-5, 5],
+                [self.box_min, self.box_max],
+            ]
+        ).to(device)  # x,y,z,phi,theta,psi, x_dot,y_dot,z_dot,w_x,w_y,w_z, box
+
+        self.control_range_ = torch.tensor(
+            [
+                [0.0, self.input_magnitude_max],
+                [0.0, self.input_magnitude_max],
+                [0.0, self.input_magnitude_max],
+                [0.0, self.input_magnitude_max],
+            ]
+        ).to(device)
+
+        self.eps_var = torch.tensor([2]).to(device)
+
+        state_mean_ = (self.state_range_[:, 0] + self.state_range_[:, 1]) / 2.0
+        state_var_ = (self.state_range_[:, 1] - self.state_range_[:, 0]) / 2.0
+
+        self.control_init = self.mass * torch.tensor(
+            [self.gravity / 4, self.gravity / 4, self.gravity / 4, self.gravity / 4]
+        ).to(device)
+
+        # Create the axes matrix for the ellipsoid
+        self.axes_matrix = torch.tensor(
+            [[self.diag_x**2, 0, 0], [0, self.diag_y**2, 0], [0, 0, self.diag_z**2]],
+            device=self.state_range_.device,
+        )
+
+        self.x_direction = torch.tensor(
+            [1.0, 0.0, 0.0], device=self.state_range_.device
+        )
+        self.y_direction = torch.tensor(
+            [0.0, 1.0, 0.0], device=self.state_range_.device
+        )
+        self.z_direction = torch.tensor(
+            [0.0, 0.0, 1.0], device=self.state_range_.device
+        )
+
+        super().__init__(
+            name="QuadcopterBox2",
+            loss_type="brt_hjivi",
+            set_mode="avoid",
+            state_dim=self.state_range_.shape[0],
+            input_dim=self.state_range_.shape[0] + 1,
+            control_dim=4,
+            disturbance_dim=0,
+            state_mean=state_mean_.cpu().tolist(),
+            state_var=state_var_.cpu().tolist(),
+            value_mean=0.5,
+            value_var=1,
+            value_normto=0.02,
+            deepReach_model="exact",  # choice ['vanilla', 'exact'],
+        )
+
+    def state_test_range(self):
+        return self.state_range_.cpu().tolist()
+
+    def state_verification_range(self):
+        return self.state_range_.cpu().tolist()
+
+    def equivalent_wrapped_state(self, state):
+        # yaw is periodic and singularity-free: a full revolution is not a failure.
+        # roll/pitch are deliberately NOT wrapped or clamped -- exceeding tilt_max must
+        # register as unsafe, not be silently folded back into the safe region.
+        wrapped_state = torch.clone(state)
+        wrapped_state[..., 5] = (wrapped_state[..., 5] + np.pi) % (2 * np.pi) - np.pi
+        return wrapped_state
+
+    def periodic_transform_fn(self, input):
+        return input
+
+    # QuadcopterBox2 dynamics (12 states + 1 box-scale state, 4 rotor controls)
+    def dsdt(self, state, control, disturbance):
+        dsdt = torch.zeros_like(state)
+
+        # position
+        dsdt[..., 0] = state[..., 6]
+        dsdt[..., 1] = state[..., 7]
+        dsdt[..., 2] = state[..., 8]
+
+        # Euler-angle kinematics (ZYX)
+        dsdt[..., 3] = (
+            state[..., 9]
+            + torch.sin(state[..., 3]) * torch.tan(state[..., 4]) * state[..., 10]
+            + torch.cos(state[..., 3]) * torch.tan(state[..., 4]) * state[..., 11]
+        )
+        dsdt[..., 4] = (
+            torch.cos(state[..., 3]) * state[..., 10]
+            - torch.sin(state[..., 3]) * state[..., 11]
+        )
+        dsdt[..., 5] = (
+            torch.sin(state[..., 3]) / torch.cos(state[..., 4]) * state[..., 10]
+            + torch.cos(state[..., 3]) / torch.cos(state[..., 4]) * state[..., 11]
+        )
+
+        # linear velocity: v_dot = -g*z_hat + (U/m) * R(eta) @ z_hat_body
+        dsdt[..., 6] = (
+            (control[..., 0] + control[..., 1] + control[..., 2] + control[..., 3])
+            / self.mass
+            * (
+                torch.cos(state[..., 3])
+                * torch.sin(state[..., 4])
+                * torch.cos(state[..., 5])
+                + torch.sin(state[..., 3]) * torch.sin(state[..., 5])
+            )
+        )
+        dsdt[..., 7] = (
+            (control[..., 0] + control[..., 1] + control[..., 2] + control[..., 3])
+            / self.mass
+            * (
+                torch.cos(state[..., 3])
+                * torch.sin(state[..., 4])
+                * torch.sin(state[..., 5])
+                - torch.sin(state[..., 3]) * torch.cos(state[..., 5])
+            )
+        )
+        dsdt[..., 8] = (
+            control[..., 0] + control[..., 1] + control[..., 2] + control[..., 3]
+        ) / self.mass * (
+            torch.cos(state[..., 3]) * torch.cos(state[..., 4])
+        ) - self.gravity
+
+        # body-rate dynamics (plus configuration: rotors 2/4 roll, rotors 1/3 pitch)
+        dsdt[..., 9] = (
+            1
+            / self.J_xx
+            * (
+                self.arm_length * (control[..., 1] - control[..., 3])
+                - state[..., 10] * state[..., 11] * (self.J_zz - self.J_yy)
+            )
+        )
+        dsdt[..., 10] = (
+            1
+            / self.J_yy
+            * (
+                self.arm_length * (control[..., 2] - control[..., 0])
+                - state[..., 9] * state[..., 11] * (self.J_xx - self.J_zz)
+            )
+        )
+        dsdt[..., 11] = (
+            1
+            / self.J_zz
+            * (
+                (
+                    control[..., 0]
+                    - control[..., 1]
+                    + control[..., 2]
+                    - control[..., 3]
+                )
+                * self.ct
+                / self.cf
+                - state[..., 9] * state[..., 10] * (self.J_yy - self.J_xx)
+            )
+        )
+
+        # the box half-width is a static parameter carried in the state
+        dsdt[..., 12] = 0 * state[..., 12]
+        return dsdt
+
+    def boundary_fn(self, state):
+        # match both device and dtype, so float64 callers (e.g. get_val_mean_var) work
+        axes_matrix = self.axes_matrix.to(state.device, state.dtype)
+        x_direction = self.x_direction.to(state.device, state.dtype)
+        y_direction = self.y_direction.to(state.device, state.dtype)
+        z_direction = self.z_direction.to(state.device, state.dtype)
+
+        px = state[..., 0]
+        py = state[..., 1]
+        pz = state[..., 2]
+        p_phi = state[..., 3]
+        p_theta = state[..., 4]
+        p_psi = state[..., 5]
+
+        b = state[..., 12]
+
+        cos_phi, sin_phi = torch.cos(p_phi), torch.sin(p_phi)
+        cos_t, sin_t = torch.cos(p_theta), torch.sin(p_theta)
+        cos_psi, sin_psi = torch.cos(p_psi), torch.sin(p_psi)
+
+        zeros = torch.zeros_like(p_phi)
+        ones = torch.ones_like(p_phi)
+
+        R_x = torch.stack(
+            [
+                torch.stack([ones, zeros, zeros], dim=-1),
+                torch.stack([zeros, cos_phi, -sin_phi], dim=-1),
+                torch.stack([zeros, sin_phi, cos_phi], dim=-1),
+            ],
+            dim=-2,
+        )
+        R_y = torch.stack(
+            [
+                torch.stack([cos_t, zeros, sin_t], dim=-1),
+                torch.stack([zeros, ones, zeros], dim=-1),
+                torch.stack([-sin_t, zeros, cos_t], dim=-1),
+            ],
+            dim=-2,
+        )
+        R_z = torch.stack(
+            [
+                torch.stack([cos_psi, -sin_psi, zeros], dim=-1),
+                torch.stack([sin_psi, cos_psi, zeros], dim=-1),
+                torch.stack([zeros, zeros, ones], dim=-1),
+            ],
+            dim=-2,
+        )
+        R = R_z @ R_y @ R_x  # world <- body
+
+        # support function of the rotated footprint along each world axis
+        Q_ellips_mat = R @ axes_matrix @ R.transpose(-1, -2)
+        w_x = torch.sqrt(
+            torch.einsum("i,...ij,j->...", x_direction, Q_ellips_mat, x_direction)
+        )
+        w_y = torch.sqrt(
+            torch.einsum("i,...ij,j->...", y_direction, Q_ellips_mat, y_direction)
+        )
+        w_z = torch.sqrt(
+            torch.einsum("i,...ij,j->...", z_direction, Q_ellips_mat, z_direction)
+        )
+
+        # signed distance from the whole footprint to each wall of the cube [-b, b]^3
+        margin_x_min = px - w_x + b
+        margin_x_max = b - px - w_x
+        margin_y_min = py - w_y + b
+        margin_y_max = b - py - w_y
+        margin_z_min = pz - w_z + b
+        margin_z_max = b - pz - w_z
+
+        # roll/pitch margin, on the same metric scale as the box margins. Zero exactly
+        # roll/pitch margins: identical to QuadcopterBox. They double as the guard that
+        # registers a 1/cos(theta) blow-up as unsafe, so they must stay.
+        # No yaw margin: psi is wrapped, and spinning in yaw inside the box is not a
+        # failure. This is the only difference from QuadcopterBox.
+        phi_min = p_phi - self.state_range_.to(state.device)[3, 0]
+        phi_max = self.state_range_.to(state.device)[3, 1] - p_phi
+        theta_min = p_theta - self.state_range_.to(state.device)[4, 0]
+        theta_max = self.state_range_.to(state.device)[4, 1] - p_theta
+
+        margins = torch.stack(
+            [
+                margin_x_min,
+                margin_x_max,
+                margin_y_min,
+                margin_y_max,
+                margin_z_min,
+                margin_z_max,
+                phi_min,
+                phi_max,
+                theta_min,
+                theta_max,
+            ],
+            dim=-1,
+        )
+
+        return torch.min(margins, dim=-1).values
+
+    def sample_target_state(self, num_samples):
+        raise NotImplementedError
+
+    def cost_fn(self, state_traj):
+        return torch.min(self.boundary_fn(state_traj), dim=-1).values
+
+    def hamiltonian(self, state, dvds):
+        phi = state[..., 3]
+        theta = state[..., 4]
+        psi = state[..., 5]
+        wx = state[..., 9]
+        wy = state[..., 10]
+        wz = state[..., 11]
+
+        cos_phi, sin_phi = torch.cos(phi), torch.sin(phi)
+        cos_t, sin_t = torch.cos(theta), torch.sin(theta)
+        cos_psi, sin_psi = torch.cos(psi), torch.sin(psi)
+
+        r3_x = cos_phi * sin_t * cos_psi + sin_phi * sin_psi
+        r3_y = cos_phi * sin_t * sin_psi - sin_phi * cos_psi
+        r3_z = cos_phi * cos_t
+
+        dot_phi_0 = wx + sin_phi * torch.tan(theta) * wy + cos_phi * torch.tan(theta) * wz
+        dot_theta_0 = cos_phi * wy - sin_phi * wz
+        dot_psi_0 = sin_phi / cos_t * wy + cos_phi / cos_t * wz
+
+        h0 = (
+            dvds[..., 0] * state[..., 6]
+            + dvds[..., 1] * state[..., 7]
+            + dvds[..., 2] * state[..., 8]
+            + dvds[..., 3] * dot_phi_0
+            + dvds[..., 4] * dot_theta_0
+            + dvds[..., 5] * dot_psi_0
+            - dvds[..., 8] * self.gravity
+            - dvds[..., 9] * (wy * wz * (self.J_zz - self.J_yy)) / self.J_xx
+            - dvds[..., 10] * (wx * wz * (self.J_xx - self.J_zz)) / self.J_yy
+            - dvds[..., 11] * (wx * wy * (self.J_yy - self.J_xx)) / self.J_zz
+        )
+
+        a = (dvds[..., 6] * r3_x + dvds[..., 7] * r3_y + dvds[..., 8] * r3_z) / self.mass
+        k = self.ct / self.cf  # yaw drag-to-thrust ratio
+
+        c1 = a - dvds[..., 10] * self.arm_length / self.J_yy + dvds[..., 11] * k / self.J_zz
+        c2 = a + dvds[..., 9] * self.arm_length / self.J_xx - dvds[..., 11] * k / self.J_zz
+        c3 = a + dvds[..., 10] * self.arm_length / self.J_yy + dvds[..., 11] * k / self.J_zz
+        c4 = a - dvds[..., 9] * self.arm_length / self.J_xx - dvds[..., 11] * k / self.J_zz
+
+        # avoid mode: the control maximises the margin, each rotor bounded in [0, u_max]
+        ham = h0 + self.input_magnitude_max * (
+            torch.clamp(c1, min=0)
+            + torch.clamp(c2, min=0)
+            + torch.clamp(c3, min=0)
+            + torch.clamp(c4, min=0)
+        )
+        return ham
+
+    def optimal_control(self, state, dvds):
+        phi = state[..., 3]
+        theta = state[..., 4]
+        psi = state[..., 5]
+
+        cos_phi, sin_phi = torch.cos(phi), torch.sin(phi)
+        sin_t = torch.sin(theta)
+        cos_psi, sin_psi = torch.cos(psi), torch.sin(psi)
+
+        r3_x = cos_phi * sin_t * cos_psi + sin_phi * sin_psi
+        r3_y = cos_phi * sin_t * sin_psi - sin_phi * cos_psi
+        r3_z = cos_phi * torch.cos(theta)
+
+        a = (dvds[..., 6] * r3_x + dvds[..., 7] * r3_y + dvds[..., 8] * r3_z) / self.mass
+        k = self.ct / self.cf
+
+        c1 = a - dvds[..., 10] * self.arm_length / self.J_yy + dvds[..., 11] * k / self.J_zz
+        c2 = a + dvds[..., 9] * self.arm_length / self.J_xx - dvds[..., 11] * k / self.J_zz
+        c3 = a + dvds[..., 10] * self.arm_length / self.J_yy + dvds[..., 11] * k / self.J_zz
+        c4 = a - dvds[..., 9] * self.arm_length / self.J_xx - dvds[..., 11] * k / self.J_zz
+
+        u1 = self.input_magnitude_max * torch.clamp(torch.sign(c1), min=0)
+        u2 = self.input_magnitude_max * torch.clamp(torch.sign(c2), min=0)
+        u3 = self.input_magnitude_max * torch.clamp(torch.sign(c3), min=0)
+        u4 = self.input_magnitude_max * torch.clamp(torch.sign(c4), min=0)
+
+        return torch.stack([u1, u2, u3, u4], dim=-1)
+
+    def optimal_disturbance(self, state, dvds):
+        return torch.tensor([0])
+
+    def plot_config(self):
+        return {
+            "state_slices": [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 2],
+            "state_labels": [
+                "x",
+                "y",
+                "z",
+                "phi",
+                "theta",
+                "psi",
+                "x_dot",
+                "y_dot",
+                "z_dot",
+                "w_x",
+                "w_y",
+                "w_z",
+                "box",
+            ],
+            "x_axis_idx": 0,
+            "y_axis_idx": 1,
+            "z_axis_idx": 6,
+        }
+
+
 class Dubins3D(Dynamics):
     def __init__(self, set_mode: str, device: str = 'cuda:0'):
         self.goalR = 0.5

@@ -9,23 +9,24 @@ import numpy as np
 import pickle
 
 from datetime import datetime
-from dynamics import dynamics 
+from dynamics import dynamics
 from experiments import experiments
 from utils import modules, dataio, losses
 
 import matplotlib.pyplot as plt
 
+
 def get_args():
     args_list = [
         "--mode", "test",
         "--experiment_class", "DeepReach",
-        "--dynamics_class", "BicopterBox",
-        "--experiment_name", "BicopterComparison_2.5_retest_0.5",
+        "--dynamics_class", "QuadcopterBox2",
+        "--experiment_name", "QuadBox2",
         "--minWith", "target",
         "--pretrain",
-        "--pretrain_iters", "10000",
-        "--num_target_samples", "5000",
-        "--epochs_til_ckpt", "200",
+        "--pretrain_iters", "1000",
+        "--num_target_samples", "0",
+        "--epochs_til_ckpt", "2000",
         "--set_mode", "avoid"
     ]
 
@@ -109,8 +110,9 @@ def get_args():
     opt, _ = p.parse_known_args(args_list)
     return opt
 
+
 opt = get_args()
-mode = opt.mode 
+mode = opt.mode
 
 experiment_dir = os.path.join(opt.experiments_dir, opt.experiment_name)
 if mode == 'test':
@@ -158,17 +160,14 @@ dynamics_kwargs = {argname: getattr(orig_opt, argname) for argname in dynamics_p
 if 'device' in dynamics_params:
     dynamics_kwargs['device'] = 'cpu'
 dynamics_obj = dynamics_class(**dynamics_kwargs)
-dynamics_obj.deepReach_model=orig_opt.deepReach_model
-
-# dynamics_obj.to('cpu')   # only if Dynamics subclasses nn.Module / has a .to()
+dynamics_obj.deepReach_model = orig_opt.deepReach_model
 
 model = modules.SingleBVPNet(in_features=dynamics_obj.input_dim, out_features=1, type=orig_opt.model, mode=orig_opt.model_mode,
                              final_layer_factor=1., hidden_features=orig_opt.num_nl, num_hidden_layers=orig_opt.num_hl, periodic_transform_fn=dynamics_obj.periodic_transform_fn)
 
-
 model.to('cpu')
 
-# checkpoint = experiment_dir + '/training/checkpoints/model_epoch_700000.pth'
+# checkpoint = experiment_dir + '/training/checkpoints/model_epoch_104000.pth'
 checkpoint = experiment_dir + '/training/checkpoints/model_final.pth'
 
 model.load_state_dict(torch.load(checkpoint, map_location='cpu')['model'])
@@ -186,9 +185,11 @@ def _move_to_cpu(obj):
             new_seq = [v.cpu() if isinstance(v, torch.Tensor) else v for v in val]
             setattr(obj, name, type(val)(new_seq))
 
+
 _move_to_cpu(dynamics_obj)
 
 import matplotlib.ticker as ticker
+
 
 def plot_state(model, device, dynamics, dataslice: np.ndarray, time: float, x_axis: int, y_axis: int, x_resolution: int, y_resolution: int, n_ticks: int = 15):
     model.eval()
@@ -242,18 +243,25 @@ def plot_state(model, device, dynamics, dataslice: np.ndarray, time: float, x_ax
 
     return values.detach().cpu().numpy(), fig, fig2
 
-val2, fig_value, fig_mask = plot_state(model, 'cpu', dynamics_obj, np.array([0, 0, 0, 2.5, 2.5, 2.5, 2.5, 2., 0, 0]), 0.5, 0, 1, 100, 100, n_ticks=15)
 
+# lo stato del QuadcopterBox2 e' cosi' composto (13 componenti):
+# [x, y, z, phi, theta, psi, x_dot, y_dot, z_dot, w_x, w_y, w_z, box]
+# dove box e' la semi-larghezza del cubo in cui il quadricottero deve restare
+# (il cubo e' [-box, box] su x, y e z), con box in [0.15, 4.0].
+slice_state = np.array([0., 0., 0., 0., 0., 0., 1., 0., 0., 0., 0., 0., 2.])
+tMax = orig_opt.tMax  # 0.6 per questo run
 
-# savefig() salva la figura *corrente*, cioe' l'ultima creata: salvo esplicitamente entrambe
-fig_value.savefig('test_bicopter_value.png')
-fig_mask.savefig('test_bicopter_mask.png')
+val2, fig_value, fig_mask = plot_state(model, 'cpu', dynamics_obj, slice_state, tMax, 0, 1, 100, 100, n_ticks=15)
+
+# savefig() salva la figura *corrente*, che e' l'ultima creata: salvo esplicitamente entrambe
+fig_value.savefig('test_quadcopter_value.png')
+fig_mask.savefig('test_quadcopter_mask.png')
 plt.show()
 
 
-# per valutare la value function V(t, x) per un singolo stato, usa la funzione evaluate_V. Come tempo passa
-# sempre quello massimo, 0.5 in questo caso. Lo stato invece è così composto : [y,z,theta, box_y_negativo, box_y_positivo, box_z_negativo, box_z_positivo, v_y, v_z, omega]
-# se V ritornata è negativa, lo stato è insicuro, se positiva, lo stato è sicuro.
+# per valutare la value function V(t, x) per un singolo stato, usa la funzione evaluate_V.
+# Come tempo passa sempre quello massimo, 0.6 in questo caso.
+# se V ritornata e' negativa, lo stato e' insicuro, se positiva, lo stato e' sicuro.
 
 def evaluate_V(model, dynamics, state, time):
     """
@@ -266,6 +274,8 @@ def evaluate_V(model, dynamics, state, time):
     model.requires_grad_(False)
 
     state = torch.as_tensor(state, dtype=torch.float32).reshape(1, -1)
+    # psi e' periodico: lo riporto in [-pi, pi] come fa il resto della pipeline,
+    # altrimenti la rete viene interrogata fuori dal suo range di training
     state = dynamics.equivalent_wrapped_state(state)
     coords = torch.zeros(1, dynamics.state_dim + 1)
     coords[:, 0] = time
@@ -278,5 +288,29 @@ def evaluate_V(model, dynamics, state, time):
     return value.item()
 
 
-v = evaluate_V(model, dynamics_obj, [0, 0, 0, 2.5, 2.5, 2.5, 2.5, 2., 0, 0], 0.5)
+def evaluate_V_batch(model, dynamics, states, time):
+    """
+    Come evaluate_V, ma per un insieme di stati.
+
+    states: array-like di forma (N, dynamics.state_dim)
+    time: float, istante temporale
+    ritorna un np.ndarray di forma (N,) con i valori di V
+    """
+    model.eval()
+    model.requires_grad_(False)
+
+    states = torch.as_tensor(states, dtype=torch.float32).reshape(-1, dynamics.state_dim)
+    states = dynamics.equivalent_wrapped_state(states)
+    coords = torch.zeros(states.shape[0], dynamics.state_dim + 1)
+    coords[:, 0] = time
+    coords[:, 1:] = states
+
+    with torch.no_grad():
+        model_results = model({'coords': dynamics.coord_to_input(coords.to('cpu')).to('cpu')})
+        values = dynamics.io_to_value(model_results['model_in'].detach(), model_results['model_out'].squeeze(dim=-1).detach())
+
+    return values.detach().cpu().numpy()
+
+
+v = evaluate_V(model, dynamics_obj, [0., 0., 0., 0., 0., 0., 1., 0., 0., 0., 0., 0., 2.], tMax)
 print(v)

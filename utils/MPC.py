@@ -51,7 +51,7 @@ class MPC:
         else:
             raise NotImplementedError
 
-        num_nan_trajs = torch.isnan(state_trajs).any(dim=(-1, -2)).sum().item()
+        num_nan_trajs = torch.isnan(state_trajs).flatten(start_dim=1).any(dim=1).sum().item()
         if num_nan_trajs > 0:
             print(f"[MPC WARNING] {num_nan_trajs}/{self.batch_size} rolled-out trajectories contain NaN "
                   f"states (likely a dynamics singularity) and will be dropped from the MPC dataset.")

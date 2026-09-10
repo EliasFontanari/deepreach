@@ -20,7 +20,7 @@ def get_args():
     args_list = [
         "--mode", "test",
         "--experiment_class", "DeepReach",
-        "--dynamics_class", "QuadcopterBox2",
+        "--dynamics_class", "QuadcopterBox5",
         "--experiment_name", "QuadBox2",
         "--minWith", "target",
         "--pretrain",
